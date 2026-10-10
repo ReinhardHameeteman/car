@@ -1,0 +1,168 @@
+<script setup lang="ts">
+import { useSettings } from '../composables/useSettings'
+
+const { settings } = useSettings()
+const emit = defineEmits<{ saved: [] }>()
+
+function save() {
+  settings.vin = settings.vin.trim().toUpperCase()
+  settings.apiKey = settings.apiKey.trim()
+  emit('saved')
+}
+
+function optionalNumber(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const n = Number(trimmed)
+  return Number.isFinite(n) ? n : null
+}
+</script>
+
+<template>
+  <section class="panel">
+    <h2>Settings</h2>
+    <p class="muted" style="margin-bottom: 0.9rem">
+      Stored locally on this device. Create an API key in the MyŠkoda app.
+    </p>
+
+    <div class="grid-2">
+      <div class="field">
+        <label for="vin">VIN</label>
+        <input id="vin" v-model="settings.vin" maxlength="17" autocomplete="off" placeholder="17 characters" />
+      </div>
+      <div class="field">
+        <label for="apiKey">API key</label>
+        <input id="apiKey" v-model="settings.apiKey" type="password" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="minSoc">Minimal SOC (%)</label>
+        <input id="minSoc" v-model.number="settings.minSocPercent" type="number" min="10" max="50" step="10" />
+      </div>
+      <div class="field">
+        <label for="maxSoc">Default max SOC (%)</label>
+        <input id="maxSoc" v-model.number="settings.defaultMaxSocPercent" type="number" min="50" max="100" step="10" />
+      </div>
+      <div class="field">
+        <label for="capacity">Battery capacity (kWh)</label>
+        <input id="capacity" v-model.number="settings.batteryCapacityKwh" type="number" min="20" max="120" step="0.1" />
+      </div>
+      <div class="field">
+        <label for="consumption">Consumption (kWh / 100 km)</label>
+        <input
+          id="consumption"
+          v-model.number="settings.consumptionKwhPer100Km"
+          type="number"
+          min="10"
+          max="40"
+          step="0.1"
+        />
+      </div>
+      <div class="field">
+        <label for="power">Home charge power (kW)</label>
+        <input id="power" v-model.number="settings.chargePowerKw" type="number" min="1.4" max="22" step="0.1" />
+      </div>
+    </div>
+
+    <h3 style="margin: 1.25rem 0 0.35rem; font-size: 1rem">Solar panels</h3>
+    <p class="muted" style="margin-bottom: 0.85rem">
+      Used with Open-Meteo ECMWF to estimate free solar Wh. Azimuth: 0° = South, −90° = East, 90° = West.
+    </p>
+    <div class="grid-2">
+      <div class="field">
+        <label for="lat">Latitude</label>
+        <input
+          id="lat"
+          type="number"
+          step="0.0001"
+          :value="settings.solarLatitude ?? ''"
+          @input="settings.solarLatitude = optionalNumber(($event.target as HTMLInputElement).value)"
+        />
+      </div>
+      <div class="field">
+        <label for="lon">Longitude</label>
+        <input
+          id="lon"
+          type="number"
+          step="0.0001"
+          :value="settings.solarLongitude ?? ''"
+          @input="settings.solarLongitude = optionalNumber(($event.target as HTMLInputElement).value)"
+        />
+      </div>
+      <div class="field">
+        <label for="azimuth">Azimuth (°)</label>
+        <input
+          id="azimuth"
+          type="number"
+          min="-180"
+          max="180"
+          step="1"
+          :value="settings.solarAzimuth ?? ''"
+          @input="settings.solarAzimuth = optionalNumber(($event.target as HTMLInputElement).value)"
+        />
+      </div>
+      <div class="field">
+        <label for="tilt">Tilt (°)</label>
+        <input
+          id="tilt"
+          type="number"
+          min="0"
+          max="90"
+          step="1"
+          :value="settings.solarTilt ?? ''"
+          @input="settings.solarTilt = optionalNumber(($event.target as HTMLInputElement).value)"
+        />
+      </div>
+      <div class="field">
+        <label for="wp">Installed power (Wp)</label>
+        <input
+          id="wp"
+          type="number"
+          min="1"
+          step="1"
+          :value="settings.solarInstalledWp ?? ''"
+          @input="settings.solarInstalledWp = optionalNumber(($event.target as HTMLInputElement).value)"
+        />
+      </div>
+    </div>
+
+    <h3 style="margin: 1.25rem 0 0.35rem; font-size: 1rem">Peblar charger</h3>
+    <p class="muted" style="margin-bottom: 0.85rem">
+      While a car charging profile runs, Peblar is switched to <strong>default</strong> mode
+      (not solar-optimized), then restored afterward. Needs host, API token (Read/Write), and
+      the web UI password (mode changes use the charger web API).
+    </p>
+    <div class="grid-2">
+      <div class="field">
+        <label for="peblarHost">Host / IP</label>
+        <input
+          id="peblarHost"
+          v-model="settings.peblarHost"
+          autocomplete="off"
+          placeholder="192.168.1.50"
+        />
+      </div>
+      <div class="field">
+        <label for="peblarToken">API token</label>
+        <input
+          id="peblarToken"
+          v-model="settings.peblarApiToken"
+          type="password"
+          autocomplete="off"
+        />
+      </div>
+      <div class="field">
+        <label for="peblarPassword">Web password</label>
+        <input
+          id="peblarPassword"
+          v-model="settings.peblarPassword"
+          type="password"
+          autocomplete="off"
+        />
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" type="button" @click="save">Save settings</button>
+    </div>
+  </section>
+</template>
