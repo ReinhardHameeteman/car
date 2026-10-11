@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue'
 import { useSettings } from '../composables/useSettings'
+import { isPeblarConfigured } from '../services/peblarApi'
 import { isSolarConfigured } from '../services/solarForecast'
 
 export type PlanMode = 'km' | 'soc'
@@ -35,6 +36,10 @@ const form = reactive({
 })
 
 const solarReady = computed(() => isSolarConfigured(settings))
+const peblarReady = computed(() => isPeblarConfigured(settings))
+const applyLabel = computed(() =>
+  settings.schedulerTarget === 'peblar' ? 'Apply to Peblar' : 'Apply to car',
+)
 
 function defaultFinishBy() {
   const d = new Date()
@@ -59,7 +64,9 @@ function onPlan() {
   <section class="panel">
     <h2>Charging plan</h2>
     <p class="muted" style="margin-bottom: 0.9rem">
-      Minimizes cost using Dutch 15-minute day-ahead prices, then writes preferred charging times to the car.
+      Minimizes cost using Dutch 15-minute day-ahead prices, then writes the schedule to
+      {{ settings.schedulerTarget === 'peblar' ? 'Peblar' : 'the car' }}
+      (see Settings → Charging schedule).
     </p>
 
     <div class="field" style="margin-bottom: 0.85rem">
@@ -112,12 +119,25 @@ function onPlan() {
       </span>
     </label>
 
+    <p
+      v-if="settings.schedulerTarget === 'peblar' && !peblarReady"
+      class="alert"
+      style="margin-top: 0.85rem"
+    >
+      Peblar scheduler selected — fill in Peblar host, API token and web password in Settings.
+    </p>
+
     <div class="actions">
       <button class="btn btn-secondary" type="button" :disabled="planning" @click="onPlan">
         {{ planning ? 'Calculating…' : 'Calculate plan' }}
       </button>
-      <button class="btn btn-primary" type="button" :disabled="!canApply || applying" @click="$emit('apply')">
-        {{ applying ? 'Applying…' : 'Apply to car' }}
+      <button
+        class="btn btn-primary"
+        type="button"
+        :disabled="!canApply || applying || (settings.schedulerTarget === 'peblar' && !peblarReady)"
+        @click="$emit('apply')"
+      >
+        {{ applying ? 'Applying…' : applyLabel }}
       </button>
     </div>
   </section>

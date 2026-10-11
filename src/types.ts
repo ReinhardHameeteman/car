@@ -7,6 +7,8 @@ export type ChargeModeValue =
   | 'IMMEDIATE_DISCHARGING'
   | 'HOME_STORAGE_CHARGING'
 
+export type SchedulerTarget = 'skoda' | 'peblar'
+
 export interface AppSettings {
   vin: string
   apiKey: string
@@ -17,6 +19,8 @@ export interface AppSettings {
   consumptionKwhPer100Km: number
   chargePowerKw: number
   profileId: number | null
+  /** Which device owns the cheap-slot schedule when applying a plan. */
+  schedulerTarget: SchedulerTarget
   /** Solar array location and orientation (Open-Meteo: azimuth 0° = South). */
   solarLatitude: number | null
   solarLongitude: number | null

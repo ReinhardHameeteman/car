@@ -63,6 +63,39 @@ function optionalNumber(value: string): number | null {
       </div>
     </div>
 
+    <h3 style="margin: 1.25rem 0 0.35rem; font-size: 1rem">Charging schedule</h3>
+    <p class="muted" style="margin-bottom: 0.85rem">
+      Choose where the optimized cheap slots are written when you apply a plan.
+    </p>
+    <div class="field" style="margin-bottom: 0.85rem">
+      <label>Scheduler</label>
+      <div class="mode-toggle">
+        <button
+          type="button"
+          :class="{ active: settings.schedulerTarget === 'skoda' }"
+          @click="settings.schedulerTarget = 'skoda'"
+        >
+          Škoda profile
+        </button>
+        <button
+          type="button"
+          :class="{ active: settings.schedulerTarget === 'peblar' }"
+          @click="settings.schedulerTarget = 'peblar'"
+        >
+          Peblar schedule
+        </button>
+      </div>
+      <p class="muted" style="margin-top: 0.45rem">
+        <template v-if="settings.schedulerTarget === 'skoda'">
+          Writes preferred charging times to the car; Peblar is temporarily set to default mode.
+        </template>
+        <template v-else>
+          Writes the schedule to Peblar (visible in the Peblar web app) and sets scheduled mode;
+          the car is set to manual so it charges when the charger allows.
+        </template>
+      </p>
+    </div>
+
     <h3 style="margin: 1.25rem 0 0.35rem; font-size: 1rem">Solar panels</h3>
     <p class="muted" style="margin-bottom: 0.85rem">
       Used with Open-Meteo ECMWF to estimate free solar Wh. Azimuth: 0° = South, −90° = East, 90° = West.
@@ -127,9 +160,9 @@ function optionalNumber(value: string): number | null {
 
     <h3 style="margin: 1.25rem 0 0.35rem; font-size: 1rem">Peblar charger</h3>
     <p class="muted" style="margin-bottom: 0.85rem">
-      While a car charging profile runs, Peblar is switched to <strong>default</strong> mode
-      (not solar-optimized), then restored afterward. Needs host, API token (Read/Write), and
-      the web UI password (mode changes use the charger web API).
+      Required for Peblar scheduling, or when using the Škoda scheduler (Peblar is switched to
+      default during charge windows, then restored). Needs host, API token (Read/Write), and
+      the web UI password.
     </p>
     <div class="grid-2">
       <div class="field">

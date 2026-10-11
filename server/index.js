@@ -4,8 +4,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  getSchedule,
   getSmartChargingMode,
   PEBLAR_MODES,
+  setSchedule,
   setSmartChargingMode,
   verifyApiToken,
 } from './peblar.js'
@@ -64,7 +66,7 @@ app.use(
   }),
 )
 
-/** @type {{ host: string, password: string, previousMode: string, restoreAt: string, timer?: NodeJS.Timeout } | null} */
+/** @type {{ host: string, password: string, previousMode: string, previousSchedule?: unknown, restoreAt: string, timer?: NodeJS.Timeout } | null} */
 let pendingRestore = null
 
 function ensureDataDir() {
@@ -80,6 +82,7 @@ function loadPendingFromDisk() {
       host: raw.host,
       password: raw.password,
       previousMode: raw.previousMode,
+      previousSchedule: raw.previousSchedule ?? null,
       restoreAt: raw.restoreAt,
     }
     schedulePendingRestore()
@@ -94,10 +97,10 @@ function persistPending() {
     if (fs.existsSync(restoreFile)) fs.unlinkSync(restoreFile)
     return
   }
-  const { host, password, previousMode, restoreAt } = pendingRestore
+  const { host, password, previousMode, previousSchedule, restoreAt } = pendingRestore
   fs.writeFileSync(
     restoreFile,
-    JSON.stringify({ host, password, previousMode, restoreAt }, null, 2),
+    JSON.stringify({ host, password, previousMode, previousSchedule, restoreAt }, null, 2),
     'utf8',
   )
 }
@@ -108,6 +111,9 @@ async function runRestore() {
   pendingRestore = null
   persistPending()
   try {
+    if (job.previousSchedule) {
+      await setSchedule(job.host, job.password, job.previousSchedule)
+    }
     await setSmartChargingMode(job.host, job.password, /** @type {any} */ (job.previousMode))
     console.log(`Peblar mode restored to ${job.previousMode}`)
   } catch (err) {
@@ -213,6 +219,43 @@ app.post('/api/peblar/prepare', async (req, res) => {
     schedulePendingRestore()
 
     res.json({ previousMode, activeMode: 'default', restoreAt })
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) })
+  }
+})
+
+app.post('/api/peblar/apply-schedule', async (req, res) => {
+  try {
+    const { host, password, token } = peblarCreds(req)
+    const restoreAt = String(req.body?.restoreAt || '').trim()
+    const schedule = req.body?.schedule
+    if (!host || !password) {
+      res.status(400).json({ error: 'Peblar host and web password are required.' })
+      return
+    }
+    if (!schedule || typeof schedule !== 'object') {
+      res.status(400).json({ error: 'schedule body is required.' })
+      return
+    }
+    if (!restoreAt || Number.isNaN(new Date(restoreAt).getTime())) {
+      res.status(400).json({ error: 'restoreAt must be a valid ISO datetime.' })
+      return
+    }
+    if (token) {
+      await verifyApiToken(host, token)
+    }
+
+    const previousMode = await getSmartChargingMode(host, password)
+    const previousSchedule = await getSchedule(host, password)
+    await setSchedule(host, password, schedule)
+    await setSmartChargingMode(host, password, 'scheduled')
+
+    if (pendingRestore?.timer) clearTimeout(pendingRestore.timer)
+    pendingRestore = { host, password, previousMode, previousSchedule, restoreAt }
+    persistPending()
+    schedulePendingRestore()
+
+    res.json({ previousMode, activeMode: 'scheduled', restoreAt })
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) })
   }

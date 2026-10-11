@@ -9,6 +9,7 @@ import { useSettings } from './composables/useSettings'
 import { fetchEnergyPrices } from './services/energyPrices'
 import { optimizeChargingProfile } from './services/optimizer'
 import {
+  applyPeblarSchedule,
   isPeblarConfigured,
   preparePeblarForProfileCharging,
   runDuePeblarRestore,
@@ -213,44 +214,85 @@ async function onApply() {
     const profile = selectedProfile()
     if (!profile) throw new Error('No charging profile found on the vehicle.')
 
-    const updated: ChargingProfile = {
-      ...profile,
-      preferredChargingTimes: plan.value.preferredChargingTimes,
-      settings: {
-        ...profile.settings,
-        targetStateOfChargeInPercent: plan.value.targetSocPercent,
-        minBatteryStateOfCharge: {
-          enabled: true,
-          minimumBatteryStateOfChargeInPercent: settings.minSocPercent,
+    const restoreAt =
+      plan.value.windows.length > 0
+        ? new Date(Math.max(...plan.value.windows.map((w) => w.end.getTime())))
+        : new Date()
+
+    if (settings.schedulerTarget === 'peblar') {
+      if (!isPeblarConfigured(settings)) {
+        throw new Error('Configure Peblar host, API token and web password first.')
+      }
+      if (!plan.value.windows.length) {
+        throw new Error('No charging windows to write to Peblar.')
+      }
+
+      // Car charges whenever Peblar allows current; target SOC still set on the vehicle.
+      const updated: ChargingProfile = {
+        ...profile,
+        preferredChargingTimes: (profile.preferredChargingTimes ?? []).map((t) => ({
+          ...t,
+          enabled: false,
+        })),
+        settings: {
+          ...profile.settings,
+          targetStateOfChargeInPercent: plan.value.targetSocPercent,
+          minBatteryStateOfCharge: {
+            enabled: true,
+            minimumBatteryStateOfChargeInPercent: settings.minSocPercent,
+          },
+          maxChargingCurrent: profile.settings.maxChargingCurrent ?? 'MAXIMUM',
+          autoUnlockPlugWhenCharged: profile.settings.autoUnlockPlugWhenCharged ?? 'OFF',
         },
-        maxChargingCurrent: profile.settings.maxChargingCurrent ?? 'MAXIMUM',
-        autoUnlockPlugWhenCharged: profile.settings.autoUnlockPlugWhenCharged ?? 'OFF',
-      },
-      timers: profile.timers ?? [],
+        timers: profile.timers ?? [],
+      }
+      await updateChargingProfile(settings.apiKey, settings.vin, updated)
+      await setChargingLimit(settings.apiKey, settings.vin, plan.value.targetSocPercent)
+      await setChargeMode(settings.apiKey, settings.vin, 'MANUAL')
+      settings.profileId = profile.id
+
+      const peblar = await applyPeblarSchedule({ ...settings }, plan.value.windows, restoreAt)
+      notice.value =
+        `Peblar schedule applied · car manual · target ${plan.value.targetSocPercent}% · ` +
+        `restore ${peblar.previousMode} after ${restoreAt.toLocaleString()}`
+    } else {
+      const updated: ChargingProfile = {
+        ...profile,
+        preferredChargingTimes: plan.value.preferredChargingTimes,
+        settings: {
+          ...profile.settings,
+          targetStateOfChargeInPercent: plan.value.targetSocPercent,
+          minBatteryStateOfCharge: {
+            enabled: true,
+            minimumBatteryStateOfChargeInPercent: settings.minSocPercent,
+          },
+          maxChargingCurrent: profile.settings.maxChargingCurrent ?? 'MAXIMUM',
+          autoUnlockPlugWhenCharged: profile.settings.autoUnlockPlugWhenCharged ?? 'OFF',
+        },
+        timers: profile.timers ?? [],
+      }
+
+      await updateChargingProfile(settings.apiKey, settings.vin, updated)
+      await setChargingLimit(settings.apiKey, settings.vin, plan.value.targetSocPercent)
+      await setChargeMode(settings.apiKey, settings.vin, 'PREFERRED_CHARGING_TIMES')
+      settings.profileId = profile.id
+
+      let peblarNote = ''
+      if (isPeblarConfigured(settings) && plan.value.windows.length > 0) {
+        const peblar = await preparePeblarForProfileCharging({ ...settings }, restoreAt)
+        peblarNote =
+          peblar.previousMode === 'default'
+            ? ' · Peblar already in default mode'
+            : ` · Peblar ${peblar.previousMode} → default until ${restoreAt.toLocaleString()}`
+      } else if (settings.peblarHost.trim() && !isPeblarConfigured(settings)) {
+        peblarNote = ' · Peblar skipped (set host, API token and web password)'
+      }
+
+      notice.value =
+        `Profile “${profile.name}” updated · target ${plan.value.targetSocPercent}% · preferred times set` +
+        peblarNote
     }
 
-    await updateChargingProfile(settings.apiKey, settings.vin, updated)
-    await setChargingLimit(settings.apiKey, settings.vin, plan.value.targetSocPercent)
-    await setChargeMode(settings.apiKey, settings.vin, 'PREFERRED_CHARGING_TIMES')
-
-    settings.profileId = profile.id
-    let peblarNote = ''
-    if (isPeblarConfigured(settings) && plan.value.windows.length > 0) {
-      const restoreAt = new Date(
-        Math.max(...plan.value.windows.map((w) => w.end.getTime())),
-      )
-      const peblar = await preparePeblarForProfileCharging({ ...settings }, restoreAt)
-      peblarNote =
-        peblar.previousMode === 'default'
-          ? ' · Peblar already in default mode'
-          : ` · Peblar ${peblar.previousMode} → default until ${restoreAt.toLocaleString()}`
-    } else if (settings.peblarHost.trim() && !isPeblarConfigured(settings)) {
-      peblarNote = ' · Peblar skipped (set host, API token and web password)'
-    }
-
-    notice.value =
-      `Profile “${profile.name}” updated · target ${plan.value.targetSocPercent}% · preferred times set` +
-      peblarNote
     await refresh()
   } catch (e) {
     error.value = formatErr(e)

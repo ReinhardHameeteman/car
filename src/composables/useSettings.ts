@@ -12,6 +12,7 @@ const defaults: AppSettings = {
   consumptionKwhPer100Km: 18,
   chargePowerKw: 11,
   profileId: null,
+  schedulerTarget: 'skoda',
   solarLatitude: null,
   solarLongitude: null,
   solarAzimuth: null,
