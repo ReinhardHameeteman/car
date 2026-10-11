@@ -4,6 +4,7 @@ import type {
   ChargingProfile,
   VehicleResponse,
 } from '../types'
+import { skodaBaseUrl } from './apiBase'
 
 export class SkodaApiError extends Error {
   status: number
@@ -21,15 +22,24 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`/api/skoda${path}`, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'X-API-Key': apiKey,
-      ...(init.headers || {}),
-    },
-  })
+  let response: Response
+  try {
+    response = await fetch(`${skodaBaseUrl()}${path}`, {
+      ...init,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-API-Key': apiKey,
+        ...(init.headers || {}),
+      },
+    })
+  } catch {
+    throw new SkodaApiError(
+      0,
+      'Failed to reach the app server',
+      'Your phone cannot reach the laptop proxy. Keep npm start (or npm run dev) running, use the same Wi‑Fi, allow Node through Windows Firewall, or reopen the current HTTPS tunnel URL.',
+    )
+  }
 
   if (!response.ok) {
     let detail: string | undefined

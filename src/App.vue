@@ -11,6 +11,8 @@ import { optimizeChargingProfile } from './services/optimizer'
 import {
   isPeblarConfigured,
   preparePeblarForProfileCharging,
+  runDuePeblarRestore,
+  schedulePeblarRestoreCheck,
 } from './services/peblarApi'
 import { fetchSolarForecast, isSolarConfigured, solarKwhAt } from './services/solarForecast'
 import {
@@ -54,6 +56,15 @@ onMounted(() => {
     e.preventDefault()
     deferredPrompt.value = e as BeforeInstallPromptEvent
   }) as EventListener)
+
+  void runDuePeblarRestore()
+    .then((restored) => {
+      if (restored) notice.value = 'Peblar charging mode restored.'
+    })
+    .catch(() => {
+      /* retry next launch */
+    })
+  schedulePeblarRestoreCheck()
 
   if (isConfigured.value) {
     void refresh()
@@ -258,7 +269,14 @@ async function installApp() {
 function formatErr(e: unknown): string {
   if (e && typeof e === 'object' && 'detail' in e) {
     const err = e as { message?: string; detail?: string }
-    return `${err.message || 'Error'}: ${err.detail || ''}`
+    return [err.message, err.detail].filter(Boolean).join(' — ')
+  }
+  if (e instanceof TypeError && /fetch/i.test(e.message)) {
+    return (
+      'Failed to reach the app server — your phone cannot reach the laptop proxy. ' +
+      'Keep the server running, stay on the same Wi‑Fi, allow Node through Windows Firewall, ' +
+      'or reopen the current HTTPS tunnel URL.'
+    )
   }
   return e instanceof Error ? e.message : String(e)
 }

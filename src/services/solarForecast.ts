@@ -1,4 +1,5 @@
 import type { AppSettings, SolarForecastSlot } from '../types'
+import { meteoBaseUrl } from './apiBase'
 
 /** System losses (inverter, wiring, soiling) applied to STC scaling. */
 const PERFORMANCE_RATIO = 0.85
@@ -55,7 +56,7 @@ export async function fetchSolarForecast(
     timezone: 'UTC',
   })
 
-  const response = await fetch(`/api/meteo/v1/ecmwf?${params}`)
+  const response = await fetch(`${meteoBaseUrl()}/v1/ecmwf?${params}`)
   if (!response.ok) {
     throw new Error(`Open-Meteo API ${response.status}: ${await response.text()}`)
   }

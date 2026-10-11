@@ -1,4 +1,5 @@
 import type { EnergyPrice } from '../types'
+import { energyBaseUrl } from './apiBase'
 
 interface EnergyZeroPrice {
   readingDate: string
@@ -18,7 +19,7 @@ async function fetchRaw(from: Date, until: Date, interval: '3' | '4'): Promise<E
     inclBtw: 'true',
   })
 
-  const response = await fetch(`/api/energy/v1/energyprices?${params}`)
+  const response = await fetch(`${energyBaseUrl()}/v1/energyprices?${params}`)
   if (!response.ok) {
     throw new Error(`EnergyZero API ${response.status}: ${await response.text()}`)
   }

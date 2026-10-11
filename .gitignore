@@ -2,6 +2,11 @@ node_modules
 dist
 .tools
 data
+android/.gradle
+android/app/build
+android/build
+android/captures
+android/local.properties
 *.local
 .DS_Store
 .env
