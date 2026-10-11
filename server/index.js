@@ -253,6 +253,10 @@ app.get(/.*/, (_req, res) => {
 
 loadPendingFromDisk()
 
-app.listen(port, () => {
-  console.log(`Enyaq Charge server on http://localhost:${port}`)
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() })
+})
+
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Enyaq Charge server on http://0.0.0.0:${port} (reachable on your LAN IP)`)
 })

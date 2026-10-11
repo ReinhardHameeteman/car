@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Skoda PWA</string>
+    <string name="title_activity_main">Skoda PWA</string>
+    <string name="package_name">nl.example.skodapwa</string>
+    <string name="custom_url_scheme">nl.example.skodapwa</string>
+</resources>

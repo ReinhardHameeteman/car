@@ -38,6 +38,8 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
+        // Never treat API calls as SPA navigations / offline fallbacks.
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -52,6 +54,7 @@ export default defineConfig({
     }),
   ],
   server: {
+    host: true, // allow phone access via laptop LAN IP
     port: 5173,
     proxy: {
       '/api/skoda': {

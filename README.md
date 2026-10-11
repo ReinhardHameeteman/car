@@ -36,23 +36,42 @@ npm run dev
 
 Create an API key in the **MyŠkoda** app, then enter VIN + key under **Settings**.
 
-## Production / Android install
+## Android app (Capacitor) — recommended
 
-Android requires HTTPS (except localhost). Build and run the bundled proxy server:
+Native Android build with `CapacitorHttp` enabled, so `fetch()` talks to Skoda directly (no laptop proxy, no CORS).
+
+Requirements: Node 20+, [Android Studio](https://developer.android.com/studio).
+
+```bash
+npm install
+npm run android
+```
+
+That builds the web UI, syncs into `android/`, and opens Android Studio. Run on a device/emulator from there.
+
+```bash
+npm run cap:sync   # rebuild + sync after UI changes
+```
+
+In the Capacitor app, Skoda / EnergyZero / Open‑Meteo are called directly. Peblar is called on your LAN (`http://charger-ip`) when the phone is on home Wi‑Fi.
+
+## PWA + laptop proxy (optional)
+
+For browser/PWA use, the Skoda API needs a proxy (no CORS). Build and run:
 
 ```bash
 npm run build
 npm start
 ```
 
-Expose the server with HTTPS (Cloudflare Tunnel, Caddy, nginx, Tailscale Serve, etc.), open the URL in Chrome on your phone, then **Install app**.
-
-The Express server serves the built PWA and proxies:
+Expose with HTTPS (Cloudflare Tunnel, etc.), open in Chrome, then **Install app**.
 
 | App path | Upstream |
 |---|---|
 | `/api/skoda/*` | `https://public.api.connect.skoda-auto.cz/*` |
 | `/api/energy/*` | `https://api.energyzero.nl/*` |
+| `/api/meteo/*` | `https://api.open-meteo.com/*` |
+| `/api/peblar/*` | Peblar on your LAN |
 
 ## How the plan works
 
