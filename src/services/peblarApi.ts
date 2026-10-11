@@ -1,4 +1,4 @@
-import type { AppSettings } from '../types'
+import type { AppSettings, ChargeWindow } from '../types'
 import { isNativeApp, peblarOrigin } from './apiBase'
 
 export type PeblarSmartChargingMode =
@@ -8,7 +8,33 @@ export type PeblarSmartChargingMode =
   | 'pure_solar'
   | 'scheduled'
 
+export interface PeblarScheduleSlot {
+  CurrentLimit: number
+  StartTime: number
+}
+
+export type PeblarWeekSchedule = {
+  Monday: PeblarScheduleSlot[]
+  Tuesday: PeblarScheduleSlot[]
+  Wednesday: PeblarScheduleSlot[]
+  Thursday: PeblarScheduleSlot[]
+  Friday: PeblarScheduleSlot[]
+  Saturday: PeblarScheduleSlot[]
+  Sunday: PeblarScheduleSlot[]
+}
+
 const RESTORE_KEY = 'enyaq-peblar-restore'
+const DAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const
+
+type DayName = (typeof DAY_NAMES)[number]
 
 export function isPeblarConfigured(settings: AppSettings): boolean {
   return (
@@ -78,7 +104,6 @@ function patchBodyForMode(mode: PeblarSmartChargingMode): Record<string, unknown
 }
 
 function cookieFromResponse(response: Response): string {
-  // CapacitorHttp may expose set-cookie; browsers often hide it.
   const anyHeaders = response.headers as Headers & { getSetCookie?: () => string[] }
   if (typeof anyHeaders.getSetCookie === 'function') {
     const list = anyHeaders.getSetCookie()
@@ -134,6 +159,87 @@ async function peblarRequest(
   return text ? (JSON.parse(text) as Record<string, unknown>) : null
 }
 
+function chargeCurrentAmps(chargePowerKw: number): number {
+  const phases = chargePowerKw >= 7 ? 3 : 1
+  return Math.max(6, Math.min(32, Math.round((chargePowerKw * 1000) / (230 * phases))))
+}
+
+function emptyDay(): PeblarScheduleSlot[] {
+  return [{ CurrentLimit: 0, StartTime: 0 }]
+}
+
+export function emptyWeekSchedule(): PeblarWeekSchedule {
+  return {
+    Monday: emptyDay(),
+    Tuesday: emptyDay(),
+    Wednesday: emptyDay(),
+    Thursday: emptyDay(),
+    Friday: emptyDay(),
+    Saturday: emptyDay(),
+    Sunday: emptyDay(),
+  }
+}
+
+function minutesSinceMidnight(d: Date): number {
+  return d.getHours() * 60 + d.getMinutes()
+}
+
+function startOfLocalDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate())
+}
+
+/** Convert optimized charge windows into a weekly Peblar schedule (recurring). */
+export function buildPeblarScheduleFromWindows(
+  windows: ChargeWindow[],
+  chargePowerKw: number,
+): PeblarWeekSchedule {
+  const amps = chargeCurrentAmps(chargePowerKw)
+  const byDay = new Map<DayName, { start: number; end: number }[]>()
+
+  for (const window of windows) {
+    let cursor = new Date(window.start)
+    const end = new Date(window.end)
+    while (cursor < end) {
+      const dayStart = startOfLocalDay(cursor)
+      const nextDay = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+      const segmentEnd = end < nextDay ? end : nextDay
+      const dayName = DAY_NAMES[cursor.getDay()] as DayName
+      const list = byDay.get(dayName) ?? []
+      list.push({
+        start: minutesSinceMidnight(cursor),
+        end: segmentEnd.getTime() === nextDay.getTime() ? 24 * 60 : minutesSinceMidnight(segmentEnd),
+      })
+      byDay.set(dayName, list)
+      cursor = nextDay
+    }
+  }
+
+  const week = emptyWeekSchedule()
+  for (const dayName of Object.keys(week) as (keyof PeblarWeekSchedule)[]) {
+    const segments = byDay.get(dayName as DayName)
+    if (!segments?.length) continue
+
+    segments.sort((a, b) => a.start - b.start)
+    const events: { t: number; amps: number }[] = [{ t: 0, amps: 0 }]
+    for (const seg of segments) {
+      if (seg.start >= seg.end) continue
+      events.push({ t: seg.start, amps })
+      if (seg.end < 24 * 60) events.push({ t: seg.end, amps: 0 })
+    }
+    events.sort((a, b) => a.t - b.t || a.amps - b.amps)
+
+    const slots: PeblarScheduleSlot[] = []
+    let lastAmps: number | null = null
+    for (const ev of events) {
+      if (lastAmps === ev.amps && slots.length) continue
+      slots.push({ CurrentLimit: ev.amps, StartTime: ev.t })
+      lastAmps = ev.amps
+    }
+    week[dayName] = slots.length ? slots : emptyDay()
+  }
+  return week
+}
+
 async function getSmartChargingModeNative(
   host: string,
   password: string,
@@ -152,6 +258,21 @@ async function setSmartChargingModeNative(
   await peblarRequest(host, cookie, 'PATCH', '/api/v1/config/user', patchBodyForMode(mode))
 }
 
+async function getScheduleNative(host: string, password: string): Promise<PeblarWeekSchedule> {
+  const cookie = await peblarLogin(host, password)
+  const schedule = await peblarRequest(host, cookie, 'GET', '/api/v1/config/scheduledcharging/schedules')
+  return (schedule ?? emptyWeekSchedule()) as PeblarWeekSchedule
+}
+
+async function setScheduleNative(
+  host: string,
+  password: string,
+  schedule: PeblarWeekSchedule,
+): Promise<void> {
+  const cookie = await peblarLogin(host, password)
+  await peblarRequest(host, cookie, 'POST', '/api/v1/config/scheduledcharging/schedules', schedule)
+}
+
 async function verifyApiTokenNative(host: string, apiToken: string): Promise<void> {
   const response = await fetch(`${peblarOrigin(host)}/api/wlac/v1/system`, {
     headers: { Accept: 'application/json', Authorization: apiToken },
@@ -165,6 +286,7 @@ interface PendingRestore {
   host: string
   password: string
   previousMode: PeblarSmartChargingMode
+  previousSchedule?: PeblarWeekSchedule | null
   restoreAt: string
 }
 
@@ -186,7 +308,7 @@ function clearPendingRestore() {
   localStorage.removeItem(RESTORE_KEY)
 }
 
-/** Switch Peblar to default mode and schedule restoring the previous mode. */
+/** Switch Peblar to default mode (Skoda-owned schedule) and restore later. */
 export async function preparePeblarForProfileCharging(
   settings: AppSettings,
   restoreAt: Date,
@@ -226,6 +348,51 @@ export async function preparePeblarForProfileCharging(
   return response.json()
 }
 
+/** Write optimized windows to Peblar schedule, enable scheduled mode, restore later. */
+export async function applyPeblarSchedule(
+  settings: AppSettings,
+  windows: ChargeWindow[],
+  restoreAt: Date,
+): Promise<{ previousMode: PeblarSmartChargingMode; restoreAt: string }> {
+  const schedule = buildPeblarScheduleFromWindows(windows, settings.chargePowerKw)
+
+  if (isNativeApp()) {
+    const host = settings.peblarHost.trim()
+    const password = settings.peblarPassword.trim()
+    const token = settings.peblarApiToken.trim()
+    await verifyApiTokenNative(host, token)
+    const previousMode = await getSmartChargingModeNative(host, password)
+    const previousSchedule = await getScheduleNative(host, password)
+    await setScheduleNative(host, password, schedule)
+    await setSmartChargingModeNative(host, password, 'scheduled')
+    savePendingRestore({
+      host,
+      password,
+      previousMode,
+      previousSchedule,
+      restoreAt: restoreAt.toISOString(),
+    })
+    schedulePeblarRestoreCheck()
+    return { previousMode, restoreAt: restoreAt.toISOString() }
+  }
+
+  const response = await fetch('/api/peblar/apply-schedule', {
+    method: 'POST',
+    headers: peblarProxyHeaders(settings),
+    body: JSON.stringify({
+      host: settings.peblarHost.trim(),
+      password: settings.peblarPassword.trim(),
+      apiToken: settings.peblarApiToken.trim(),
+      restoreAt: restoreAt.toISOString(),
+      schedule,
+    }),
+  })
+  if (!response.ok) {
+    throw new Error(await readError(response))
+  }
+  return response.json()
+}
+
 export async function getPeblarRestoreStatus(): Promise<{
   pending: boolean
   previousMode?: PeblarSmartChargingMode
@@ -250,6 +417,9 @@ export async function runDuePeblarRestore(): Promise<boolean> {
   const job = loadPendingRestore()
   if (!job) return false
   if (new Date(job.restoreAt).getTime() > Date.now()) return false
+  if (job.previousSchedule) {
+    await setScheduleNative(job.host, job.password, job.previousSchedule)
+  }
   await setSmartChargingModeNative(job.host, job.password, job.previousMode)
   clearPendingRestore()
   return true

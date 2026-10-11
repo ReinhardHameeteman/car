@@ -216,3 +216,23 @@ export async function verifyApiToken(host, apiToken) {
   }
   return res.body ? JSON.parse(res.body) : null
 }
+
+/**
+ * @param {string} host
+ * @param {string} password
+ */
+export async function getSchedule(host, password) {
+  const cookie = await peblarLogin(host, password)
+  return peblarRequest(host, cookie, 'GET', '/api/v1/config/scheduledcharging/schedules')
+}
+
+/**
+ * @param {string} host
+ * @param {string} password
+ * @param {unknown} schedule
+ */
+export async function setSchedule(host, password, schedule) {
+  const cookie = await peblarLogin(host, password)
+  await peblarRequest(host, cookie, 'POST', '/api/v1/config/scheduledcharging/schedules', schedule)
+  return schedule
+}
