@@ -41,6 +41,8 @@ app.use(
     target: 'https://public.api.connect.skoda-auto.cz',
     changeOrigin: true,
     pathRewrite: { '^/api/skoda': '' },
+    timeout: 20_000,
+    proxyTimeout: 20_000,
     onProxyReq(proxyReq, req) {
       const key = req.headers['x-api-key']
       if (key) proxyReq.setHeader('X-API-Key', key)
@@ -205,7 +207,11 @@ app.post('/api/peblar/prepare', async (req, res) => {
       return
     }
     if (token) {
-      await verifyApiToken(host, token)
+      try {
+        await verifyApiToken(host, token)
+      } catch (tokenErr) {
+        console.warn('Peblar API token check skipped:', tokenErr)
+      }
     }
 
     const previousMode = await getSmartChargingMode(host, password)
@@ -241,8 +247,14 @@ app.post('/api/peblar/apply-schedule', async (req, res) => {
       res.status(400).json({ error: 'restoreAt must be a valid ISO datetime.' })
       return
     }
+    // Schedule uses web-password auth. Token check is optional — some firmwares
+    // 404 on /api/wlac even when the web UI API works.
     if (token) {
-      await verifyApiToken(host, token)
+      try {
+        await verifyApiToken(host, token)
+      } catch (tokenErr) {
+        console.warn('Peblar API token check skipped:', tokenErr)
+      }
     }
 
     const previousMode = await getSmartChargingMode(host, password)
@@ -257,7 +269,9 @@ app.post('/api/peblar/apply-schedule', async (req, res) => {
 
     res.json({ previousMode, activeMode: 'scheduled', restoreAt })
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : String(err) })
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('Peblar apply-schedule failed:', message)
+    res.status(502).json({ error: message })
   }
 })
 
@@ -287,6 +301,10 @@ app.post('/api/peblar/restore-now', async (_req, res) => {
   }
 })
 
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() })
+})
+
 app.use(express.static(dist))
 app.get(/.*/, (_req, res) => {
   res.sendFile(path.join(dist, 'index.html'), (err) => {
@@ -296,10 +314,15 @@ app.get(/.*/, (_req, res) => {
 
 loadPendingFromDisk()
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() })
-})
-
-app.listen(port, '0.0.0.0', () => {
+const server = app.listen(port, '0.0.0.0', () => {
   console.log(`Enyaq Charge server on http://0.0.0.0:${port} (reachable on your LAN IP)`)
 })
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(`Port ${port} is already in use. Stop the other process, then run npm run dev again.`)
+  } else {
+    console.error(err)
+  }
+  process.exit(1)
+})
+

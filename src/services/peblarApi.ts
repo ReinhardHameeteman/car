@@ -10,6 +10,7 @@ export type PeblarSmartChargingMode =
 
 export interface PeblarScheduleSlot {
   CurrentLimit: number
+  /** Seconds since midnight. */
   StartTime: number
 }
 
@@ -55,12 +56,14 @@ function peblarProxyHeaders(settings: AppSettings): HeadersInit {
 }
 
 async function readError(response: Response): Promise<string> {
+  const text = await response.text()
   try {
-    const body = await response.json()
-    return body.error || JSON.stringify(body)
+    const body = JSON.parse(text) as { error?: string }
+    if (body.error) return body.error
   } catch {
-    return response.statusText
+    /* plain text */
   }
+  return text.trim() || `${response.status} ${response.statusText}`
 }
 
 function modeFromUserConfig(body: Record<string, unknown> | null): PeblarSmartChargingMode {
@@ -180,8 +183,10 @@ export function emptyWeekSchedule(): PeblarWeekSchedule {
   }
 }
 
-function minutesSinceMidnight(d: Date): number {
-  return d.getHours() * 60 + d.getMinutes()
+const SECONDS_PER_DAY = 24 * 60 * 60
+
+function secondsSinceMidnight(d: Date): number {
+  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()
 }
 
 function startOfLocalDay(d: Date): Date {
@@ -201,13 +206,16 @@ export function buildPeblarScheduleFromWindows(
     const end = new Date(window.end)
     while (cursor < end) {
       const dayStart = startOfLocalDay(cursor)
-      const nextDay = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+      const nextDay = new Date(dayStart.getTime() + SECONDS_PER_DAY * 1000)
       const segmentEnd = end < nextDay ? end : nextDay
       const dayName = DAY_NAMES[cursor.getDay()] as DayName
       const list = byDay.get(dayName) ?? []
       list.push({
-        start: minutesSinceMidnight(cursor),
-        end: segmentEnd.getTime() === nextDay.getTime() ? 24 * 60 : minutesSinceMidnight(segmentEnd),
+        start: secondsSinceMidnight(cursor),
+        end:
+          segmentEnd.getTime() === nextDay.getTime()
+            ? SECONDS_PER_DAY
+            : secondsSinceMidnight(segmentEnd),
       })
       byDay.set(dayName, list)
       cursor = nextDay
@@ -224,7 +232,7 @@ export function buildPeblarScheduleFromWindows(
     for (const seg of segments) {
       if (seg.start >= seg.end) continue
       events.push({ t: seg.start, amps })
-      if (seg.end < 24 * 60) events.push({ t: seg.end, amps: 0 })
+      if (seg.end < SECONDS_PER_DAY) events.push({ t: seg.end, amps: 0 })
     }
     events.sort((a, b) => a.t - b.t || a.amps - b.amps)
 
@@ -360,7 +368,13 @@ export async function applyPeblarSchedule(
     const host = settings.peblarHost.trim()
     const password = settings.peblarPassword.trim()
     const token = settings.peblarApiToken.trim()
-    await verifyApiTokenNative(host, token)
+    if (token) {
+      try {
+        await verifyApiTokenNative(host, token)
+      } catch {
+        /* web password auth is enough for schedule */
+      }
+    }
     const previousMode = await getSmartChargingModeNative(host, password)
     const previousSchedule = await getScheduleNative(host, password)
     await setScheduleNative(host, password, schedule)

@@ -65,7 +65,7 @@ function onPlan() {
     <h2>Charging plan</h2>
     <p class="muted" style="margin-bottom: 0.9rem">
       Minimizes cost using Dutch 15-minute day-ahead prices, then writes the schedule to
-      {{ settings.schedulerTarget === 'peblar' ? 'Peblar' : 'the car' }}
+      {{ settings.schedulerTarget === 'peblar' ? 'Peblar (no Škoda API calls)' : 'the car' }}
       (see Settings → Charging schedule).
     </p>
 
