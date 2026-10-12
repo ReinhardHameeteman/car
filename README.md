@@ -3,7 +3,7 @@
 Vue.js PWA that plans cost-optimized charging for a Škoda Enyaq using:
 
 - [MyŠkoda Public API](https://public.api.connect.skoda-auto.cz/docs)
-- Dutch 15-minute day-ahead electricity prices via [EnergyZero](https://api.energyzero.nl)
+- Dutch day-ahead electricity prices via [epexprijzen.nl](https://epexprijzen.nl/api-documentatie) (Zonneplan quarterly)
   (falls back to hourly prices expanded to 15-minute slots when quarter-hour data is unavailable)
 
 ## Features
@@ -53,7 +53,7 @@ That builds the web UI, syncs into `android/`, and opens Android Studio. Run on 
 npm run cap:sync   # rebuild + sync after UI changes
 ```
 
-In the Capacitor app, Skoda / EnergyZero / Open‑Meteo are called directly. Peblar is called on your LAN (`http://charger-ip`) when the phone is on home Wi‑Fi.
+In the Capacitor app, Skoda / epexprijzen / Open‑Meteo are called directly. Peblar is called on your LAN (`http://charger-ip`) when the phone is on home Wi‑Fi.
 
 ## PWA + laptop proxy (optional)
 
@@ -69,7 +69,7 @@ Expose with HTTPS (Cloudflare Tunnel, etc.), open in Chrome, then **Install app*
 | App path | Upstream |
 |---|---|
 | `/api/skoda/*` | `https://public.api.connect.skoda-auto.cz/*` |
-| `/api/energy/*` | `https://api.energyzero.nl/*` |
+| `/api/energy/*` | `https://epexprijzen.nl/*` |
 | `/api/meteo/*` | `https://api.open-meteo.com/*` |
 | `/api/peblar/*` | Peblar on your LAN |
 
