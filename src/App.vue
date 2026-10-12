@@ -415,14 +415,6 @@ function formatErr(e: unknown): string {
           if (isConfigured && !skodaRateLimited) refresh()
         }"
       />
-      <section class="panel">
-        <h2>Install tip</h2>
-        <p class="muted">
-          Open this app over HTTPS on your phone (or via your home server URL), then use
-          Chrome’s “Install app” / “Add to Home screen”. The proxy server is required so
-          browser calls to Skoda and price APIs are not blocked by CORS.
-        </p>
-      </section>
     </template>
   </div>
 </template>
