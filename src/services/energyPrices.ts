@@ -1,44 +1,17 @@
 import type { EnergyPrice } from '../types'
 import { energyBaseUrl } from './apiBase'
 
-interface EnergyZeroPrice {
-  readingDate: string
+interface EpexPricePoint {
+  t: string
   price: number
 }
 
-interface EnergyZeroResponse {
-  Prices?: EnergyZeroPrice[]
-}
-
-async function fetchRaw(from: Date, until: Date, interval: '3' | '4'): Promise<EnergyZeroPrice[]> {
-  const params = new URLSearchParams({
-    fromDate: from.toISOString(),
-    tillDate: new Date(until.getTime() - 1).toISOString(),
-    interval,
-    usageType: '1',
-    inclBtw: 'true',
-  })
-
-  const response = await fetch(`${energyBaseUrl()}/v1/energyprices?${params}`)
-  if (!response.ok) {
-    throw new Error(`EnergyZero API ${response.status}: ${await response.text()}`)
-  }
-
-  const data = (await response.json()) as EnergyZeroResponse
-  return data.Prices ?? []
-}
-
-function toSlots(items: EnergyZeroPrice[], slotMinutes: number): EnergyPrice[] {
-  return items
-    .map((item) => {
-      const start = new Date(item.readingDate)
-      return {
-        start,
-        end: new Date(start.getTime() + slotMinutes * 60 * 1000),
-        priceEurPerKwh: item.price,
-      }
-    })
-    .sort((a, b) => a.start.getTime() - b.start.getTime())
+interface EpexPricesResponse {
+  today?: EpexPricePoint[]
+  tomorrow?: EpexPricePoint[]
+  energy_tax?: number
+  provider_charge?: number
+  spot_coefficient?: number
 }
 
 /** Expand hourly prices into four identical 15-minute slots. */
@@ -57,16 +30,56 @@ function expandHourlyToQuarter(hourly: EnergyPrice[]): EnergyPrice[] {
   return slots
 }
 
+function medianGapMinutes(points: EpexPricePoint[]): number {
+  if (points.length < 2) return 15
+  const gaps: number[] = []
+  for (let i = 1; i < points.length; i++) {
+    const gap =
+      (new Date(points[i].t).getTime() - new Date(points[i - 1].t).getTime()) / 60_000
+    if (gap > 0) gaps.push(gap)
+  }
+  if (!gaps.length) return 15
+  gaps.sort((a, b) => a - b)
+  return gaps[Math.floor(gaps.length / 2)]
+}
+
+function toSlots(points: EpexPricePoint[], slotMinutes: number): EnergyPrice[] {
+  return points
+    .map((item) => {
+      const start = new Date(item.t)
+      return {
+        start,
+        end: new Date(start.getTime() + slotMinutes * 60 * 1000),
+        priceEurPerKwh: item.price,
+      }
+    })
+    .sort((a, b) => a.start.getTime() - b.start.getTime())
+}
+
 /**
- * Fetch NL day-ahead electricity prices as 15-minute slots (EUR/kWh incl. VAT).
- * Prefers EnergyZero quarter-hour data; falls back to hourly prices expanded to 15 minutes.
+ * Fetch NL day-ahead electricity prices (Zonneplan via epexprijzen.nl) as 15-minute slots.
+ * Prices are all-in EUR/kWh as returned by the provider endpoint.
  */
 export async function fetchEnergyPrices(from: Date, until: Date): Promise<EnergyPrice[]> {
-  const quarter = toSlots(await fetchRaw(from, until, '3'), 15)
-  const slots =
-    quarter.length > 0
-      ? quarter
-      : expandHourlyToQuarter(toSlots(await fetchRaw(from, until, '4'), 60))
+  const response = await fetch(`${energyBaseUrl()}/api/v1/prices/zonneplan/quarterly`)
+  if (!response.ok) {
+    throw new Error(`epexprijzen API ${response.status}: ${await response.text()}`)
+  }
+
+  const data = (await response.json()) as EpexPricesResponse
+  const points = [...(data.today ?? []), ...(data.tomorrow ?? [])].sort(
+    (a, b) => new Date(a.t).getTime() - new Date(b.t).getTime(),
+  )
+  if (!points.length) {
+    throw new Error('No day-ahead prices available from epexprijzen.nl yet.')
+  }
+
+  const gap = medianGapMinutes(points)
+  const slotMinutes = gap <= 20 ? 15 : 60
+  let slots = toSlots(points, slotMinutes)
+  if (slotMinutes === 60) {
+    slots = expandHourlyToQuarter(slots)
+  }
 
   return slots.filter((slot) => slot.end > from && slot.start < until)
 }

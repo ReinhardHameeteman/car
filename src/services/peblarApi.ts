@@ -9,6 +9,7 @@ export type PeblarSmartChargingMode =
   | 'scheduled'
 
 export interface PeblarScheduleSlot {
+  /** Charge current limit in amperes (0 = no charging). */
   CurrentLimit: number
   /** Seconds since midnight. */
   StartTime: number
@@ -162,9 +163,11 @@ async function peblarRequest(
   return text ? (JSON.parse(text) as Record<string, unknown>) : null
 }
 
+/** Peblar schedule CurrentLimit is in amperes (0 = no charging). */
 function chargeCurrentAmps(chargePowerKw: number): number {
-  const phases = chargePowerKw >= 7 ? 3 : 1
-  return Math.max(6, Math.min(32, Math.round((chargePowerKw * 1000) / (230 * phases))))
+  const kw = Number.isFinite(chargePowerKw) && chargePowerKw > 0 ? chargePowerKw : 11
+  const phases = kw >= 7 ? 3 : 1
+  return Math.max(6, Math.min(32, Math.round((kw * 1000) / (230 * phases))))
 }
 
 function emptyDay(): PeblarScheduleSlot[] {
@@ -372,7 +375,7 @@ export async function applyPeblarSchedule(
       try {
         await verifyApiTokenNative(host, token)
       } catch {
-        /* web password auth is enough for schedule */
+        /* schedule uses web password */
       }
     }
     const previousMode = await getSmartChargingModeNative(host, password)

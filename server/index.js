@@ -53,7 +53,7 @@ app.use(
 app.use(
   '/api/energy',
   createProxyMiddleware({
-    target: 'https://api.energyzero.nl',
+    target: 'https://epexprijzen.nl',
     changeOrigin: true,
     pathRewrite: { '^/api/energy': '' },
   }),

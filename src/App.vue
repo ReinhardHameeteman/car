@@ -5,6 +5,7 @@ import PlanForm from './components/PlanForm.vue'
 import PlanResult from './components/PlanResult.vue'
 import SettingsForm from './components/SettingsForm.vue'
 import StatusPanel from './components/StatusPanel.vue'
+import { useBatteryState } from './composables/useBatteryState'
 import { useSettings } from './composables/useSettings'
 import { fetchEnergyPrices } from './services/energyPrices'
 import { optimizeChargingProfile } from './services/optimizer'
@@ -20,6 +21,7 @@ import {
   getVehicle,
   setChargeMode,
   setChargingLimit,
+  SkodaApiError,
   startCharging,
   stopCharging,
   updateChargingProfile,
@@ -27,6 +29,7 @@ import {
 import type { ChargingProfile, OptimizeResult, Vehicle } from './types'
 
 const { settings, isConfigured } = useSettings()
+const { battery, applyFromApi, markManualEdit } = useBatteryState()
 
 const tab = ref<'status' | 'plan' | 'settings'>('status')
 const vehicle = ref<Vehicle | null>(null)
@@ -37,6 +40,7 @@ const applying = ref(false)
 const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
 const plan = ref<OptimizeResult | null>(null)
+const skodaRateLimited = ref(false)
 const deferredPrompt = ref<BeforeInstallPromptEvent | null>(null)
 
 interface BeforeInstallPromptEvent extends Event {
@@ -46,10 +50,10 @@ interface BeforeInstallPromptEvent extends Event {
 
 const charging = computed(() => vehicle.value?.charging)
 const status = computed(() => charging.value?.status)
-const soc = computed(() => status.value?.battery?.stateOfChargeInPercent)
-const rangeKm = computed(() => {
-  const meters = status.value?.battery?.remainingCruisingRangeInMeters
-  return meters != null ? meters / 1000 : undefined
+const canApplyPlan = computed(() => {
+  if (!plan.value) return false
+  if (settings.schedulerTarget === 'peblar') return isPeblarConfigured(settings)
+  return isConfigured.value
 })
 
 onMounted(() => {
@@ -69,15 +73,23 @@ onMounted(() => {
 
   if (isConfigured.value) {
     void refresh()
+  } else if (settings.schedulerTarget === 'peblar' && isPeblarConfigured(settings)) {
+    /* Peblar-only: status can use manual SOC */
   } else {
     tab.value = 'settings'
   }
 })
 
+function isRateLimitError(e: unknown): boolean {
+  if (e instanceof SkodaApiError && e.status === 429) return true
+  const text = formatErr(e)
+  return /rate.?limit|too many requests|429/i.test(text)
+}
+
 async function refresh() {
   if (!isConfigured.value) {
-    error.value = 'Configure VIN and API key first.'
-    tab.value = 'settings'
+    error.value = 'Configure VIN and API key first, or edit battery SOC below.'
+    tab.value = 'status'
     return
   }
   loading.value = true
@@ -85,6 +97,12 @@ async function refresh() {
   try {
     const response = await getVehicle(settings.apiKey, settings.vin)
     vehicle.value = response.vehicle
+    skodaRateLimited.value = false
+    const nextSoc = response.vehicle.charging?.status?.battery?.stateOfChargeInPercent
+    const meters = response.vehicle.charging?.status?.battery?.remainingCruisingRangeInMeters
+    if (nextSoc != null) {
+      applyFromApi(nextSoc, meters != null ? meters / 1000 : null)
+    }
     if (!settings.profileId && response.vehicle.chargingProfiles?.profiles?.length) {
       const current = response.vehicle.chargingProfiles.currentVehiclePositionProfile
       settings.profileId = current?.id ?? response.vehicle.chargingProfiles.profiles[0].id
@@ -95,7 +113,13 @@ async function refresh() {
       notice.value = null
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message + ('detail' in e ? `: ${(e as { detail?: string }).detail}` : '') : String(e)
+    if (isRateLimitError(e)) {
+      skodaRateLimited.value = true
+      error.value = formatErr(e)
+      tab.value = 'status'
+    } else {
+      error.value = formatErr(e)
+    }
   } finally {
     loading.value = false
   }
@@ -109,6 +133,7 @@ async function onStart() {
     notice.value = 'Start charging requested.'
     await refresh()
   } catch (e) {
+    if (isRateLimitError(e)) skodaRateLimited.value = true
     error.value = formatErr(e)
   } finally {
     actionBusy.value = false
@@ -123,6 +148,7 @@ async function onStop() {
     notice.value = 'Stop charging requested.'
     await refresh()
   } catch (e) {
+    if (isRateLimitError(e)) skodaRateLimited.value = true
     error.value = formatErr(e)
   } finally {
     actionBusy.value = false
@@ -139,8 +165,13 @@ async function onPlan(payload: {
   planning.value = true
   error.value = null
   try {
-    // Prefer cached SOC; only hit Skoda when we have nothing (Peblar plans don't need it).
-    if (!vehicle.value && settings.schedulerTarget !== 'peblar') await refresh()
+    if (
+      battery.source == null &&
+      !skodaRateLimited.value &&
+      isConfigured.value
+    ) {
+      await refresh()
+    }
     const finishBy = new Date(payload.finishBy)
     if (Number.isNaN(finishBy.getTime()) || finishBy <= new Date()) {
       throw new Error('Finish time must be in the future.')
@@ -182,8 +213,8 @@ async function onPlan(payload: {
       desiredKm: payload.mode === 'km' ? payload.desiredKm : undefined,
       targetSocPercent: payload.mode === 'soc' ? payload.targetSocPercent : undefined,
       finishBy,
-      currentSocPercent: soc.value ?? settings.minSocPercent,
-      currentRangeKm: rangeKm.value ?? 0,
+      currentSocPercent: battery.socPercent,
+      currentRangeKm: battery.rangeKm ?? 0,
       existingTimes: profile?.preferredChargingTimes,
       useSolar,
     })
@@ -224,7 +255,7 @@ async function onApply() {
         throw new Error('No charging windows to write to Peblar.')
       }
 
-      // Peblar-only: no Skoda calls (avoids rate limits; charger owns the schedule).
+      // Peblar-only — no Škoda calls (profile/rate-limit issues must not block apply).
       const peblar = await applyPeblarSchedule({ ...settings }, plan.value.windows, restoreAt)
       notice.value =
         `Peblar schedule applied · target ${plan.value.targetSocPercent}% · ` +
@@ -288,8 +319,8 @@ async function installApp() {
 function formatErr(e: unknown): string {
   if (e && typeof e === 'object' && 'status' in e && (e as { status: number }).status === 429) {
     return (
-      'Škoda API rate limit exceeded. Wait a while before refreshing status or applying to the car. ' +
-      'Peblar scheduling does not need Škoda — you can still plan and Apply to Peblar.'
+      'Škoda API rate limit exceeded (20/hour). Edit battery SOC on the Status tab, or wait and refresh. ' +
+      'Peblar Apply does not use Škoda.'
     )
   }
   if (e && typeof e === 'object' && 'detail' in e) {
@@ -297,8 +328,8 @@ function formatErr(e: unknown): string {
     const text = [err.message, err.detail].filter(Boolean).join(' — ')
     if (/rate.?limit|too many requests|429/i.test(text)) {
       return (
-        'Škoda API rate limit exceeded. Wait before using status/start/stop or the Škoda scheduler. ' +
-        'Peblar Apply still works without Škoda.'
+        'Škoda API rate limit exceeded (20/hour). Edit battery SOC on the Status tab, or wait and refresh. ' +
+        'Peblar Apply does not use Škoda.'
       )
     }
     return text
@@ -342,22 +373,25 @@ function formatErr(e: unknown): string {
 
     <template v-if="tab === 'status'">
       <StatusPanel
+        v-model:soc="battery.socPercent"
+        v-model:range-km="battery.rangeKm"
         :vehicle-name="vehicle?.name"
         :state="status?.state"
-        :soc="soc"
-        :range-km="rangeKm"
         :power-kw="status?.chargePowerInKw"
         :charge-type="status?.chargeType"
         :mode="charging?.settings?.preferredChargeMode"
         :target-soc="charging?.settings?.targetStateOfChargeInPercent"
         :in-saved-location="charging?.isVehicleInSavedLocation"
-        :updated-at="charging?.carCapturedTimestamp"
         :loading="loading"
+        :rate-limited="skodaRateLimited"
+        :source="battery.source"
+        :updated-at="battery.updatedAt"
         @refresh="refresh"
+        @edit="markManualEdit"
       />
       <ChargeControls
         :busy="actionBusy"
-        :can-control="isConfigured"
+        :can-control="isConfigured && !skodaRateLimited"
         @start="onStart"
         @stop="onStop"
       />
@@ -367,7 +401,7 @@ function formatErr(e: unknown): string {
       <PlanForm
         :planning="planning"
         :applying="applying"
-        :can-apply="!!plan && isConfigured"
+        :can-apply="canApplyPlan"
         @plan="onPlan"
         @apply="onApply"
       />
@@ -375,13 +409,18 @@ function formatErr(e: unknown): string {
     </template>
 
     <template v-else>
-      <SettingsForm @saved="() => { notice = 'Settings saved.'; if (isConfigured) refresh() }" />
+      <SettingsForm
+        @saved="() => {
+          notice = 'Settings saved.'
+          if (isConfigured && !skodaRateLimited) refresh()
+        }"
+      />
       <section class="panel">
         <h2>Install tip</h2>
         <p class="muted">
           Open this app over HTTPS on your phone (or via your home server URL), then use
           Chrome’s “Install app” / “Add to Home screen”. The proxy server is required so
-          browser calls to Skoda and EnergyZero are not blocked by CORS.
+          browser calls to Skoda and price APIs are not blocked by CORS.
         </p>
       </section>
     </template>

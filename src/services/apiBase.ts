@@ -13,7 +13,7 @@ export function skodaBaseUrl(): string {
 
 export function energyBaseUrl(): string {
   return isNativeApp()
-    ? 'https://api.energyzero.nl'
+    ? 'https://epexprijzen.nl'
     : '/api/energy'
 }
 
