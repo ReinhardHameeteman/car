@@ -17,15 +17,25 @@ export class SkodaApiError extends Error {
   }
 }
 
+const DEFAULT_TIMEOUT_MS = 20_000
+
 async function request<T>(
   apiKey: string,
   path: string,
   init: RequestInit = {},
+  timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  if (init.signal) {
+    init.signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+
   let response: Response
   try {
     response = await fetch(`${skodaBaseUrl()}${path}`, {
       ...init,
+      signal: controller.signal,
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
@@ -33,12 +43,17 @@ async function request<T>(
         ...(init.headers || {}),
       },
     })
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new SkodaApiError(0, `Skoda API timed out after ${timeoutMs / 1000}s`, path)
+    }
     throw new SkodaApiError(
       0,
       'Failed to reach the app server',
       'Your phone cannot reach the laptop proxy. Keep npm start (or npm run dev) running, use the same Wi‑Fi, allow Node through Windows Firewall, or reopen the current HTTPS tunnel URL.',
     )
+  } finally {
+    clearTimeout(timer)
   }
 
   if (!response.ok) {

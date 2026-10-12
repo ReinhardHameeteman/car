@@ -139,7 +139,8 @@ async function onPlan(payload: {
   planning.value = true
   error.value = null
   try {
-    if (!vehicle.value) await refresh()
+    // Prefer cached SOC; only hit Skoda when we have nothing (Peblar plans don't need it).
+    if (!vehicle.value && settings.schedulerTarget !== 'peblar') await refresh()
     const finishBy = new Date(payload.finishBy)
     if (Number.isNaN(finishBy.getTime()) || finishBy <= new Date()) {
       throw new Error('Finish time must be in the future.')
@@ -210,10 +211,6 @@ async function onApply() {
   applying.value = true
   error.value = null
   try {
-    if (!vehicle.value) await refresh()
-    const profile = selectedProfile()
-    if (!profile) throw new Error('No charging profile found on the vehicle.')
-
     const restoreAt =
       plan.value.windows.length > 0
         ? new Date(Math.max(...plan.value.windows.map((w) => w.end.getTime())))
@@ -227,35 +224,16 @@ async function onApply() {
         throw new Error('No charging windows to write to Peblar.')
       }
 
-      // Car charges whenever Peblar allows current; target SOC still set on the vehicle.
-      const updated: ChargingProfile = {
-        ...profile,
-        preferredChargingTimes: (profile.preferredChargingTimes ?? []).map((t) => ({
-          ...t,
-          enabled: false,
-        })),
-        settings: {
-          ...profile.settings,
-          targetStateOfChargeInPercent: plan.value.targetSocPercent,
-          minBatteryStateOfCharge: {
-            enabled: true,
-            minimumBatteryStateOfChargeInPercent: settings.minSocPercent,
-          },
-          maxChargingCurrent: profile.settings.maxChargingCurrent ?? 'MAXIMUM',
-          autoUnlockPlugWhenCharged: profile.settings.autoUnlockPlugWhenCharged ?? 'OFF',
-        },
-        timers: profile.timers ?? [],
-      }
-      await updateChargingProfile(settings.apiKey, settings.vin, updated)
-      await setChargingLimit(settings.apiKey, settings.vin, plan.value.targetSocPercent)
-      await setChargeMode(settings.apiKey, settings.vin, 'MANUAL')
-      settings.profileId = profile.id
-
+      // Peblar-only: no Skoda calls (avoids rate limits; charger owns the schedule).
       const peblar = await applyPeblarSchedule({ ...settings }, plan.value.windows, restoreAt)
       notice.value =
-        `Peblar schedule applied · car manual · target ${plan.value.targetSocPercent}% · ` +
+        `Peblar schedule applied · target ${plan.value.targetSocPercent}% · ` +
         `restore ${peblar.previousMode} after ${restoreAt.toLocaleString()}`
     } else {
+      if (!vehicle.value) await refresh()
+      const profile = selectedProfile()
+      if (!profile) throw new Error('No charging profile found on the vehicle.')
+
       const updated: ChargingProfile = {
         ...profile,
         preferredChargingTimes: plan.value.preferredChargingTimes,
@@ -291,9 +269,8 @@ async function onApply() {
       notice.value =
         `Profile “${profile.name}” updated · target ${plan.value.targetSocPercent}% · preferred times set` +
         peblarNote
+      await refresh()
     }
-
-    await refresh()
   } catch (e) {
     error.value = formatErr(e)
   } finally {
@@ -309,9 +286,22 @@ async function installApp() {
 }
 
 function formatErr(e: unknown): string {
+  if (e && typeof e === 'object' && 'status' in e && (e as { status: number }).status === 429) {
+    return (
+      'Škoda API rate limit exceeded. Wait a while before refreshing status or applying to the car. ' +
+      'Peblar scheduling does not need Škoda — you can still plan and Apply to Peblar.'
+    )
+  }
   if (e && typeof e === 'object' && 'detail' in e) {
     const err = e as { message?: string; detail?: string }
-    return [err.message, err.detail].filter(Boolean).join(' — ')
+    const text = [err.message, err.detail].filter(Boolean).join(' — ')
+    if (/rate.?limit|too many requests|429/i.test(text)) {
+      return (
+        'Škoda API rate limit exceeded. Wait before using status/start/stop or the Škoda scheduler. ' +
+        'Peblar Apply still works without Škoda.'
+      )
+    }
+    return text
   }
   if (e instanceof TypeError && /fetch/i.test(e.message)) {
     return (
