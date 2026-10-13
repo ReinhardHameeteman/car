@@ -180,6 +180,8 @@ function optionalNumber(value: string): number | null {
       </div>
       <p class="muted" style="margin-top: 0.75rem">
         Needs host, API token (Read/Write), and the web UI password for mode/schedule changes.
+        On Android the phone must be on the same home Wi‑Fi as the charger (LAN IP is not
+        reachable over mobile data).
       </p>
     </template>
 

@@ -186,9 +186,11 @@ function toPreferredTimes(windows: ChargeWindow[], existing?: ChargingTime[]): C
 export function optimizeChargingProfile(input: {
   settings: AppSettings
   prices: EnergyPrice[]
-  /** Plan from trip distance (adds min SOC as reserve). */
+  /** Which input drives the plan — never mix km and target SOC. */
+  mode: 'km' | 'soc'
+  /** Plan from trip distance (adds min SOC as reserve). Used when mode === 'km'. */
   desiredKm?: number
-  /** Plan from an absolute target SOC (min SOC is not added again). */
+  /** Plan from an absolute target SOC. Used when mode === 'soc'. */
   targetSocPercent?: number
   finishBy: Date
   currentSocPercent: number
@@ -203,6 +205,7 @@ export function optimizeChargingProfile(input: {
     currentSocPercent,
     currentRangeKm,
     existingTimes,
+    mode,
   } = input
 
   const consumption = settings.consumptionKwhPer100Km
@@ -217,19 +220,28 @@ export function optimizeChargingProfile(input: {
   let requiredSoc: number
   let desiredKm: number
 
-  if (input.targetSocPercent != null && !Number.isNaN(input.targetSocPercent)) {
-    requiredSoc = clamp(input.targetSocPercent, 1, 100)
+  if (mode === 'soc') {
+    const target = Number(input.targetSocPercent)
+    if (!Number.isFinite(target)) {
+      throw new Error('Target SOC is required in target-SOC mode.')
+    }
+    requiredSoc = clamp(target, 1, 100)
     desiredKm = Math.max(
       0,
       fullRangeKm * ((requiredSoc - settings.minSocPercent) / 100),
     )
   } else {
-    desiredKm = Math.max(0, input.desiredKm ?? 0)
+    const km = Number(input.desiredKm)
+    if (!Number.isFinite(km) || km <= 0) {
+      throw new Error('Desired km is required in distance mode.')
+    }
+    desiredKm = km
     const tripEnergyKwh = (desiredKm / 100) * consumption
     const socForTrip =
       settings.batteryCapacityKwh > 0
         ? (tripEnergyKwh / settings.batteryCapacityKwh) * 100
         : 100
+    // Trip energy + min-SOC reserve; ignore any leftover targetSocPercent field.
     requiredSoc = Math.min(100, socForTrip + settings.minSocPercent)
   }
 
@@ -241,7 +253,7 @@ export function optimizeChargingProfile(input: {
     raisedLimit = true
     targetSocPercent = Math.max(targetSocPercent, roundSocTarget(requiredSoc))
     warning =
-      input.targetSocPercent != null
+      mode === 'soc'
         ? `Target SOC ${Math.round(requiredSoc)}% is above the default ${defaultMax}% limit. ` +
           `Raising charge limit to ${targetSocPercent}%.`
         : `Desired ${Math.round(desiredKm)} km plus min SOC reserve (${settings.minSocPercent}%) ` +

@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Peblar local REST / web API is HTTP on the LAN. -->
-    <base-config cleartextTrafficPermitted="true" />
+    <!-- Peblar local REST / web API is plain HTTP on the LAN. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
 </network-security-config>

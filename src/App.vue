@@ -81,9 +81,9 @@ onMounted(() => {
 })
 
 function isRateLimitError(e: unknown): boolean {
-  if (e instanceof SkodaApiError && e.status === 429) return true
+  if (e instanceof SkodaApiError) return e.isRateLimitExceeded
   const text = formatErr(e)
-  return /rate.?limit|too many requests|429/i.test(text)
+  return /rate.?limit exceeded|rate-limit-exceeded/i.test(text)
 }
 
 async function refresh() {
@@ -210,6 +210,7 @@ async function onPlan(payload: {
     plan.value = optimizeChargingProfile({
       settings: { ...settings },
       prices,
+      mode: payload.mode,
       desiredKm: payload.mode === 'km' ? payload.desiredKm : undefined,
       targetSocPercent: payload.mode === 'soc' ? payload.targetSocPercent : undefined,
       finishBy,
@@ -317,22 +318,24 @@ async function installApp() {
 }
 
 function formatErr(e: unknown): string {
-  if (e && typeof e === 'object' && 'status' in e && (e as { status: number }).status === 429) {
-    return (
-      'Škoda API rate limit exceeded (20/hour). Edit battery SOC on the Status tab, or wait and refresh. ' +
-      'Peblar Apply does not use Škoda.'
-    )
-  }
-  if (e && typeof e === 'object' && 'detail' in e) {
-    const err = e as { message?: string; detail?: string }
-    const text = [err.message, err.detail].filter(Boolean).join(' — ')
-    if (/rate.?limit|too many requests|429/i.test(text)) {
+  if (e instanceof SkodaApiError) {
+    if (e.isRateLimitExceeded) {
       return (
         'Škoda API rate limit exceeded (20/hour). Edit battery SOC on the Status tab, or wait and refresh. ' +
         'Peblar Apply does not use Škoda.'
       )
     }
-    return text
+    if (e.isVehicleNotAccepting) {
+      return (
+        'The car is offline or not accepting commands right now. ' +
+        'We retried automatically — try again in a minute (or wake the car via MyŠkoda).'
+      )
+    }
+    return [e.message, e.detail].filter(Boolean).join(' — ')
+  }
+  if (e && typeof e === 'object' && 'detail' in e) {
+    const err = e as { message?: string; detail?: string }
+    return [err.message, err.detail].filter(Boolean).join(' — ')
   }
   if (e instanceof TypeError && /fetch/i.test(e.message)) {
     return (

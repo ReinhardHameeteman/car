@@ -6,6 +6,8 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     androidScheme: 'https',
+    // Required so CapacitorHttp / WebView can call Peblar over plain HTTP on the LAN.
+    cleartext: true,
   },
   android: {
     allowMixedContent: true,

@@ -24,6 +24,23 @@ export function meteoBaseUrl(): string {
 }
 
 export function peblarOrigin(host: string): string {
-  const cleaned = host.replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const cleaned = host
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '')
   return `http://${cleaned}`
+}
+
+/** Friendlier message when the phone cannot reach a LAN Peblar IP. */
+export function peblarConnectionHint(host: string, err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  if (!/failed to connect|connection refused|network is unreachable|timed out|ECONNREFUSED|ENETUNREACH|Cleartext/i.test(raw)) {
+    return raw
+  }
+  const ip = host.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '') || 'the Peblar IP'
+  return (
+    `Cannot reach Peblar at ${ip}. ` +
+    `Put the phone on the same home Wi‑Fi as the charger (not mobile data / guest Wi‑Fi), ` +
+    `confirm the IP in Settings, then retry.`
+  )
 }
