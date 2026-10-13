@@ -131,19 +131,27 @@ async function nativeHttp(
   path: string,
   options: { headers?: Record<string, string>; data?: unknown } = {},
 ): Promise<HttpResponse> {
+  // CapacitorHttp timeouts are not always honored on Android — race a hard deadline.
+  const request = CapacitorHttp.request({
+    url: `${peblarOrigin(host)}${path}`,
+    method,
+    headers: {
+      Accept: 'application/json',
+      ...(options.data != null ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
+    data: options.data,
+    connectTimeout: NATIVE_TIMEOUT_MS,
+    readTimeout: NATIVE_TIMEOUT_MS,
+  })
+  const deadline = new Promise<never>((_, reject) => {
+    setTimeout(
+      () => reject(new Error(`Peblar request timed out after ${NATIVE_TIMEOUT_MS / 1000}s`)),
+      NATIVE_TIMEOUT_MS,
+    )
+  })
   try {
-    return await CapacitorHttp.request({
-      url: `${peblarOrigin(host)}${path}`,
-      method,
-      headers: {
-        Accept: 'application/json',
-        ...(options.data != null ? { 'Content-Type': 'application/json' } : {}),
-        ...(options.headers || {}),
-      },
-      data: options.data,
-      connectTimeout: NATIVE_TIMEOUT_MS,
-      readTimeout: NATIVE_TIMEOUT_MS,
-    })
+    return await Promise.race([request, deadline])
   } catch (err) {
     throw new Error(peblarConnectionHint(host, err))
   }
