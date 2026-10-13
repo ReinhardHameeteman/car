@@ -44,9 +44,12 @@ export class SkodaApiError extends Error {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = 20_000
-const COMMAND_MAX_ATTEMPTS = 4
-const COMMAND_DEFAULT_WAIT_SEC = 15
+const DEFAULT_TIMEOUT_MS = 15_000
+/** Keep Apply responsive — car-offline retries used to stack into multi-minute hangs. */
+const COMMAND_TIMEOUT_MS = 12_000
+const COMMAND_MAX_ATTEMPTS = 2
+const COMMAND_DEFAULT_WAIT_SEC = 8
+const COMMAND_MAX_WAIT_SEC = 20
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -136,7 +139,7 @@ async function requestCommand<T>(
   apiKey: string,
   path: string,
   init: RequestInit = {},
-  timeoutMs = DEFAULT_TIMEOUT_MS,
+  timeoutMs = COMMAND_TIMEOUT_MS,
 ): Promise<T> {
   let lastError: unknown
   for (let attempt = 1; attempt <= COMMAND_MAX_ATTEMPTS; attempt++) {
@@ -148,7 +151,10 @@ async function requestCommand<T>(
         throw err
       }
       if (attempt >= COMMAND_MAX_ATTEMPTS) break
-      const waitSec = err.retryAfterSec ?? COMMAND_DEFAULT_WAIT_SEC
+      const waitSec = Math.min(
+        COMMAND_MAX_WAIT_SEC,
+        err.retryAfterSec ?? COMMAND_DEFAULT_WAIT_SEC,
+      )
       await sleep(waitSec * 1000)
     }
   }

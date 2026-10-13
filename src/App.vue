@@ -282,26 +282,50 @@ async function onApply() {
         timers: profile.timers ?? [],
       }
 
-      await updateChargingProfile(settings.apiKey, settings.vin, updated)
-      await setChargingLimit(settings.apiKey, settings.vin, plan.value.targetSocPercent)
-      await setChargeMode(settings.apiKey, settings.vin, 'PREFERRED_CHARGING_TIMES')
-      settings.profileId = profile.id
+      const carNotes: string[] = []
+      try {
+        await updateChargingProfile(settings.apiKey, settings.vin, updated)
+        settings.profileId = profile.id
+      } catch (e) {
+        carNotes.push(`profile: ${formatErr(e)}`)
+      }
+      try {
+        await setChargingLimit(settings.apiKey, settings.vin, plan.value.targetSocPercent)
+      } catch (e) {
+        carNotes.push(`limit: ${formatErr(e)}`)
+      }
+      try {
+        await setChargeMode(settings.apiKey, settings.vin, 'PREFERRED_CHARGING_TIMES')
+      } catch (e) {
+        carNotes.push(`mode: ${formatErr(e)}`)
+      }
 
       let peblarNote = ''
       if (isPeblarConfigured(settings) && plan.value.windows.length > 0) {
-        const peblar = await preparePeblarForProfileCharging({ ...settings }, restoreAt)
-        peblarNote =
-          peblar.previousMode === 'default'
-            ? ' · Peblar already in default mode'
-            : ` · Peblar ${peblar.previousMode} → default until ${restoreAt.toLocaleString()}`
+        try {
+          const peblar = await preparePeblarForProfileCharging({ ...settings }, restoreAt)
+          peblarNote =
+            peblar.previousMode === 'default'
+              ? ' · Peblar already in default mode'
+              : ` · Peblar ${peblar.previousMode} → default until ${restoreAt.toLocaleString()}`
+        } catch (e) {
+          peblarNote = ` · Peblar: ${formatErr(e)}`
+        }
       } else if (settings.peblarHost.trim() && !isPeblarConfigured(settings)) {
         peblarNote = ' · Peblar skipped (set host, API token and web password)'
       }
 
-      notice.value =
-        `Profile “${profile.name}” updated · target ${plan.value.targetSocPercent}% · preferred times set` +
-        peblarNote
-      await refresh()
+      if (carNotes.length) {
+        notice.value =
+          `Applied with warnings · target ${plan.value.targetSocPercent}%` +
+          peblarNote +
+          ` · ${carNotes.join(' · ')}`
+      } else {
+        notice.value =
+          `Profile “${profile.name}” updated · target ${plan.value.targetSocPercent}% · preferred times set` +
+          peblarNote
+      }
+      void refresh()
     }
   } catch (e) {
     error.value = formatErr(e)

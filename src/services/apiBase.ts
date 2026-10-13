@@ -34,7 +34,11 @@ export function peblarOrigin(host: string): string {
 /** Friendlier message when the phone cannot reach a LAN Peblar IP. */
 export function peblarConnectionHint(host: string, err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err)
-  if (!/failed to connect|connection refused|network is unreachable|timed out|ECONNREFUSED|ENETUNREACH|Cleartext/i.test(raw)) {
+  if (
+    !/failed to connect|connection refused|network is unreachable|timed out|timeout|ECONNREFUSED|ENETUNREACH|Cleartext/i.test(
+      raw,
+    )
+  ) {
     return raw
   }
   const ip = host.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '') || 'the Peblar IP'
