@@ -1,5 +1,9 @@
+import { CapacitorHttp, type HttpHeaders, type HttpResponse } from '@capacitor/core'
 import type { AppSettings, ChargeWindow } from '../types'
-import { isNativeApp, peblarOrigin } from './apiBase'
+import { isNativeApp, peblarConnectionHint, peblarOrigin } from './apiBase'
+
+/** Keep native Peblar calls short — stacked logins were hanging Apply for minutes. */
+const NATIVE_TIMEOUT_MS = 8_000
 
 export type PeblarSmartChargingMode =
   | 'default'
@@ -9,7 +13,7 @@ export type PeblarSmartChargingMode =
   | 'scheduled'
 
 export interface PeblarScheduleSlot {
-  /** Charge current limit in amperes (0 = no charging). */
+  /** Charge current limit in milliamps (0 = no charging). UI shows amps. */
   CurrentLimit: number
   /** Seconds since midnight. */
   StartTime: number
@@ -107,34 +111,55 @@ function patchBodyForMode(mode: PeblarSmartChargingMode): Record<string, unknown
   return { ScheduledChargingEnable: false, SolarChargingEnable: false }
 }
 
-function cookieFromResponse(response: Response): string {
-  const anyHeaders = response.headers as Headers & { getSetCookie?: () => string[] }
-  if (typeof anyHeaders.getSetCookie === 'function') {
-    const list = anyHeaders.getSetCookie()
-    if (list?.length) return list.map((c) => c.split(';')[0].trim()).join('; ')
-  }
-  const raw = response.headers.get('set-cookie')
+function cookieFromCapacitorHeaders(headers: HttpHeaders): string {
+  const raw =
+    headers['Set-Cookie'] ||
+    headers['set-cookie'] ||
+    headers['Set-cookie'] ||
+    Object.entries(headers).find(([k]) => k.toLowerCase() === 'set-cookie')?.[1]
   if (!raw) return ''
-  return raw
+  return String(raw)
     .split(/,(?=[^;]+?=)/)
     .map((c) => c.split(';')[0].trim())
     .filter(Boolean)
     .join('; ')
 }
 
-async function peblarLogin(host: string, password: string): Promise<string> {
-  const response = await fetch(`${peblarOrigin(host)}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ Password: password, PersistentSession: true }),
-  })
-  if (!response.ok) {
-    throw new Error(`Peblar login failed (${response.status}): ${await response.text()}`)
+async function nativeHttp(
+  host: string,
+  method: string,
+  path: string,
+  options: { headers?: Record<string, string>; data?: unknown } = {},
+): Promise<HttpResponse> {
+  try {
+    return await CapacitorHttp.request({
+      url: `${peblarOrigin(host)}${path}`,
+      method,
+      headers: {
+        Accept: 'application/json',
+        ...(options.data != null ? { 'Content-Type': 'application/json' } : {}),
+        ...(options.headers || {}),
+      },
+      data: options.data,
+      connectTimeout: NATIVE_TIMEOUT_MS,
+      readTimeout: NATIVE_TIMEOUT_MS,
+    })
+  } catch (err) {
+    throw new Error(peblarConnectionHint(host, err))
   }
-  const cookie = cookieFromResponse(response)
+}
+
+async function peblarLogin(host: string, password: string): Promise<string> {
+  const response = await nativeHttp(host, 'POST', '/api/v1/auth/login', {
+    data: { Password: password, PersistentSession: true },
+  })
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Peblar login failed (${response.status}): ${JSON.stringify(response.data)}`)
+  }
+  const cookie = cookieFromCapacitorHeaders(response.headers)
   if (!cookie) {
     throw new Error(
-      'Peblar login succeeded but no session cookie was returned. CapacitorHttp is required for Peblar on Android.',
+      'Peblar login succeeded but no session cookie was returned. Rebuild the Android app with CapacitorHttp + cleartext enabled.',
     )
   }
   return cookie
@@ -147,27 +172,30 @@ async function peblarRequest(
   path: string,
   body?: unknown,
 ): Promise<Record<string, unknown> | null> {
-  const response = await fetch(`${peblarOrigin(host)}${path}`, {
-    method,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      Cookie: cookie,
-    },
-    body: body != null ? JSON.stringify(body) : undefined,
+  const response = await nativeHttp(host, method, path, {
+    headers: { Cookie: cookie },
+    data: body,
   })
-  const text = await response.text()
-  if (!response.ok) {
-    throw new Error(`Peblar ${method} ${path} failed (${response.status}): ${text}`)
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(
+      `Peblar ${method} ${path} failed (${response.status}): ${JSON.stringify(response.data)}`,
+    )
   }
-  return text ? (JSON.parse(text) as Record<string, unknown>) : null
+  if (response.data == null || response.data === '') return null
+  if (typeof response.data === 'object') return response.data as Record<string, unknown>
+  if (typeof response.data === 'string') {
+    return response.data ? (JSON.parse(response.data) as Record<string, unknown>) : null
+  }
+  return null
 }
 
-/** Peblar schedule CurrentLimit is in amperes (0 = no charging). */
-function chargeCurrentAmps(chargePowerKw: number): number {
-  const kw = Number.isFinite(chargePowerKw) && chargePowerKw > 0 ? chargePowerKw : 11
-  const phases = kw >= 7 ? 3 : 1
-  return Math.max(6, Math.min(32, Math.round((kw * 1000) / (230 * phases))))
+/** Home charge power (kW) → schedule CurrentLimit in milliamps. */
+function chargeCurrentMilliamps(chargePowerKw: number): number {
+  const kw = Number(chargePowerKw)
+  const safeKw = Number.isFinite(kw) && kw > 0 ? kw : 11
+  const phases = safeKw >= 7 ? 3 : 1
+  const amps = Math.max(6, Math.min(32, Math.round((safeKw * 1000) / (230 * phases))))
+  return amps * 1000
 }
 
 function emptyDay(): PeblarScheduleSlot[] {
@@ -201,7 +229,7 @@ export function buildPeblarScheduleFromWindows(
   windows: ChargeWindow[],
   chargePowerKw: number,
 ): PeblarWeekSchedule {
-  const amps = chargeCurrentAmps(chargePowerKw)
+  const milliamps = chargeCurrentMilliamps(chargePowerKw)
   const byDay = new Map<DayName, { start: number; end: number }[]>()
 
   for (const window of windows) {
@@ -231,66 +259,64 @@ export function buildPeblarScheduleFromWindows(
     if (!segments?.length) continue
 
     segments.sort((a, b) => a.start - b.start)
-    const events: { t: number; amps: number }[] = [{ t: 0, amps: 0 }]
+    // Prefer non-zero when two events share a timestamp (window end == next start).
+    const events: { t: number; ma: number }[] = [{ t: 0, ma: 0 }]
     for (const seg of segments) {
       if (seg.start >= seg.end) continue
-      events.push({ t: seg.start, amps })
-      if (seg.end < SECONDS_PER_DAY) events.push({ t: seg.end, amps: 0 })
+      events.push({ t: seg.start, ma: milliamps })
+      if (seg.end < SECONDS_PER_DAY) events.push({ t: seg.end, ma: 0 })
     }
-    events.sort((a, b) => a.t - b.t || a.amps - b.amps)
+    events.sort((a, b) => a.t - b.t || b.ma - a.ma)
 
     const slots: PeblarScheduleSlot[] = []
-    let lastAmps: number | null = null
+    let lastMa: number | null = null
     for (const ev of events) {
-      if (lastAmps === ev.amps && slots.length) continue
-      slots.push({ CurrentLimit: ev.amps, StartTime: ev.t })
-      lastAmps = ev.amps
+      if (lastMa === ev.ma && slots.length) continue
+      slots.push({ CurrentLimit: ev.ma, StartTime: ev.t })
+      lastMa = ev.ma
     }
     week[dayName] = slots.length ? slots : emptyDay()
   }
   return week
 }
 
-async function getSmartChargingModeNative(
+/** One login, then read mode + schedule, write schedule, enable scheduled mode. */
+async function applyScheduleNative(
+  host: string,
+  password: string,
+  schedule: PeblarWeekSchedule,
+): Promise<{ previousMode: PeblarSmartChargingMode; previousSchedule: PeblarWeekSchedule }> {
+  const cookie = await peblarLogin(host, password)
+  const config = await peblarRequest(host, cookie, 'GET', '/api/v1/config/user')
+  const previousMode = modeFromUserConfig(config)
+  const previousSchedule = ((await peblarRequest(
+    host,
+    cookie,
+    'GET',
+    '/api/v1/config/scheduledcharging/schedules',
+  )) ?? emptyWeekSchedule()) as PeblarWeekSchedule
+  await peblarRequest(
+    host,
+    cookie,
+    'POST',
+    '/api/v1/config/scheduledcharging/schedules',
+    schedule,
+  )
+  await peblarRequest(host, cookie, 'PATCH', '/api/v1/config/user', patchBodyForMode('scheduled'))
+  return { previousMode, previousSchedule }
+}
+
+async function prepareDefaultModeNative(
   host: string,
   password: string,
 ): Promise<PeblarSmartChargingMode> {
   const cookie = await peblarLogin(host, password)
   const config = await peblarRequest(host, cookie, 'GET', '/api/v1/config/user')
-  return modeFromUserConfig(config)
-}
-
-async function setSmartChargingModeNative(
-  host: string,
-  password: string,
-  mode: PeblarSmartChargingMode,
-): Promise<void> {
-  const cookie = await peblarLogin(host, password)
-  await peblarRequest(host, cookie, 'PATCH', '/api/v1/config/user', patchBodyForMode(mode))
-}
-
-async function getScheduleNative(host: string, password: string): Promise<PeblarWeekSchedule> {
-  const cookie = await peblarLogin(host, password)
-  const schedule = await peblarRequest(host, cookie, 'GET', '/api/v1/config/scheduledcharging/schedules')
-  return (schedule ?? emptyWeekSchedule()) as PeblarWeekSchedule
-}
-
-async function setScheduleNative(
-  host: string,
-  password: string,
-  schedule: PeblarWeekSchedule,
-): Promise<void> {
-  const cookie = await peblarLogin(host, password)
-  await peblarRequest(host, cookie, 'POST', '/api/v1/config/scheduledcharging/schedules', schedule)
-}
-
-async function verifyApiTokenNative(host: string, apiToken: string): Promise<void> {
-  const response = await fetch(`${peblarOrigin(host)}/api/wlac/v1/system`, {
-    headers: { Accept: 'application/json', Authorization: apiToken },
-  })
-  if (!response.ok) {
-    throw new Error(`Peblar API token check failed (${response.status}): ${await response.text()}`)
+  const previousMode = modeFromUserConfig(config)
+  if (previousMode !== 'default') {
+    await peblarRequest(host, cookie, 'PATCH', '/api/v1/config/user', patchBodyForMode('default'))
   }
+  return previousMode
 }
 
 interface PendingRestore {
@@ -327,12 +353,7 @@ export async function preparePeblarForProfileCharging(
   if (isNativeApp()) {
     const host = settings.peblarHost.trim()
     const password = settings.peblarPassword.trim()
-    const token = settings.peblarApiToken.trim()
-    await verifyApiTokenNative(host, token)
-    const previousMode = await getSmartChargingModeNative(host, password)
-    if (previousMode !== 'default') {
-      await setSmartChargingModeNative(host, password, 'default')
-    }
+    const previousMode = await prepareDefaultModeNative(host, password)
     savePendingRestore({
       host,
       password,
@@ -370,18 +391,7 @@ export async function applyPeblarSchedule(
   if (isNativeApp()) {
     const host = settings.peblarHost.trim()
     const password = settings.peblarPassword.trim()
-    const token = settings.peblarApiToken.trim()
-    if (token) {
-      try {
-        await verifyApiTokenNative(host, token)
-      } catch {
-        /* schedule uses web password */
-      }
-    }
-    const previousMode = await getSmartChargingModeNative(host, password)
-    const previousSchedule = await getScheduleNative(host, password)
-    await setScheduleNative(host, password, schedule)
-    await setSmartChargingModeNative(host, password, 'scheduled')
+    const { previousMode, previousSchedule } = await applyScheduleNative(host, password, schedule)
     savePendingRestore({
       host,
       password,
@@ -428,16 +438,33 @@ export async function getPeblarRestoreStatus(): Promise<{
   return response.json()
 }
 
+async function restoreNative(job: PendingRestore): Promise<void> {
+  const cookie = await peblarLogin(job.host, job.password)
+  if (job.previousSchedule) {
+    await peblarRequest(
+      job.host,
+      cookie,
+      'POST',
+      '/api/v1/config/scheduledcharging/schedules',
+      job.previousSchedule,
+    )
+  }
+  await peblarRequest(
+    job.host,
+    cookie,
+    'PATCH',
+    '/api/v1/config/user',
+    patchBodyForMode(job.previousMode),
+  )
+}
+
 /** Run due Peblar restores (native: localStorage job; checked on launch / timer). */
 export async function runDuePeblarRestore(): Promise<boolean> {
   if (!isNativeApp()) return false
   const job = loadPendingRestore()
   if (!job) return false
   if (new Date(job.restoreAt).getTime() > Date.now()) return false
-  if (job.previousSchedule) {
-    await setScheduleNative(job.host, job.password, job.previousSchedule)
-  }
-  await setSmartChargingModeNative(job.host, job.password, job.previousMode)
+  await restoreNative(job)
   clearPendingRestore()
   return true
 }
