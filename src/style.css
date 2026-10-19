@@ -170,6 +170,11 @@ p {
   outline-offset: 1px;
 }
 
+/* Keep the Android/WebView native calendar/clock picker readable on dark UI. */
+.field input.datetime-input {
+  color-scheme: dark;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
