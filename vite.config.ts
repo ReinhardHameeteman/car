@@ -65,7 +65,7 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true,
       },
-      '/api/meteo': {
+      '/api/jeroen': {
         target: 'http://localhost:8787',
         changeOrigin: true,
       },

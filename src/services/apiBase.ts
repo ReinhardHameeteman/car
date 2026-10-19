@@ -17,10 +17,8 @@ export function energyBaseUrl(): string {
     : '/api/energy'
 }
 
-export function meteoBaseUrl(): string {
-  return isNativeApp()
-    ? 'https://api.open-meteo.com'
-    : '/api/meteo'
+export function jeroenBaseUrl(): string {
+  return isNativeApp() ? 'https://jeroen.nl' : '/api/jeroen'
 }
 
 export function peblarOrigin(host: string): string {

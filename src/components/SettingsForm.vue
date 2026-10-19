@@ -187,8 +187,7 @@ function optionalNumber(value: string): number | null {
 
     <template v-else>
       <p class="muted" style="margin-bottom: 0.85rem">
-        Used with Open-Meteo ECMWF to estimate free solar Wh. Azimuth: 0° = South, −90° = East,
-        90° = West.
+        Used with jeroen.nl solar yield forecast. Azimuth: 0° = South, −90° = East, 90° = West.
       </p>
       <div class="grid-2">
         <div class="field">

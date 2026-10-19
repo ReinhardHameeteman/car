@@ -1,9 +1,8 @@
 import type { AppSettings, SolarForecastSlot } from '../types'
-import { meteoBaseUrl } from './apiBase'
+import { jeroenBaseUrl } from './apiBase'
 
-/** System losses (inverter, wiring, soiling) applied to STC scaling. */
-const PERFORMANCE_RATIO = 0.85
 const SLOT_HOURS = 0.25
+const HOUR_HOURS = 1
 
 export function isSolarConfigured(settings: AppSettings): boolean {
   const { solarLatitude, solarLongitude, solarAzimuth, solarTilt, solarInstalledWp } = settings
@@ -22,16 +21,28 @@ export function isSolarConfigured(settings: AppSettings): boolean {
   )
 }
 
-interface OpenMeteoResponse {
-  hourly?: {
-    time: string[]
-    global_tilted_irradiance?: (number | null)[]
+type HourlyRow = [string, number, string]
+
+interface JeroenDay {
+  date: string
+  hourly_kwh_system?: HourlyRow[]
+}
+
+interface JeroenForecast {
+  days?: JeroenDay[]
+}
+
+interface McpCallResult {
+  result?: {
+    structuredContent?: JeroenForecast
+    content?: Array<{ type: string; text?: string }>
   }
+  error?: { message?: string; code?: number }
 }
 
 /**
- * Fetch ECMWF global tilted irradiance and convert to estimated PV energy per 15-min slot.
- * Open-Meteo azimuth: 0° South, -90° East, 90° West, ±180° North.
+ * Fetch PV yield from jeroen.nl MCP (`get_solar_forecast`) and expand to 15-min slots.
+ * Azimuth: 0° South, −90° East, 90° West (same convention as jeroen.nl).
  */
 export async function fetchSolarForecast(
   settings: AppSettings,
@@ -41,52 +52,85 @@ export async function fetchSolarForecast(
   if (!isSolarConfigured(settings)) return []
 
   const msPerDay = 24 * 60 * 60 * 1000
-  const forecastDays = Math.min(
-    16,
+  const days = Math.min(
+    7,
     Math.max(1, Math.ceil((until.getTime() - from.getTime()) / msPerDay) + 1),
   )
 
-  const params = new URLSearchParams({
-    latitude: String(settings.solarLatitude),
-    longitude: String(settings.solarLongitude),
-    hourly: 'global_tilted_irradiance',
-    tilt: String(settings.solarTilt),
-    azimuth: String(settings.solarAzimuth),
-    forecast_days: String(forecastDays),
-    timezone: 'UTC',
+  const response = await fetch(`${jeroenBaseUrl()}/mcp`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'get_solar_forecast',
+        arguments: {
+          latitude: settings.solarLatitude,
+          longitude: settings.solarLongitude,
+          tilt: settings.solarTilt,
+          azimuth: settings.solarAzimuth,
+          kwp: settings.solarInstalledWp! / 1000,
+          days,
+          include_hourly: true,
+        },
+      },
+    }),
   })
 
-  const response = await fetch(`${meteoBaseUrl()}/v1/ecmwf?${params}`)
   if (!response.ok) {
-    throw new Error(`Open-Meteo API ${response.status}: ${await response.text()}`)
+    throw new Error(`jeroen.nl MCP ${response.status}: ${await response.text()}`)
   }
 
-  const data = (await response.json()) as OpenMeteoResponse
-  const times = data.hourly?.time ?? []
-  const gti = data.hourly?.global_tilted_irradiance ?? []
-  const wp = settings.solarInstalledWp!
+  const payload = (await response.json()) as McpCallResult
+  if (payload.error) {
+    throw new Error(payload.error.message ?? `jeroen.nl MCP error ${payload.error.code}`)
+  }
 
+  const forecast = parseForecast(payload)
   const slots: SolarForecastSlot[] = []
-  for (let i = 0; i < times.length; i++) {
-    const hourStart = new Date(times[i].endsWith('Z') ? times[i] : `${times[i]}:00.000Z`)
-    const irradiance = Math.max(0, gti[i] ?? 0)
-    // STC: 1000 W/m² → rated Wp. Scale by GTI and performance ratio.
-    const hourKwh = wp * (irradiance / 1000) * PERFORMANCE_RATIO * 1
 
-    for (let q = 0; q < 4; q++) {
-      const start = new Date(hourStart.getTime() + q * 15 * 60 * 1000)
-      const end = new Date(start.getTime() + 15 * 60 * 1000)
-      if (end <= from || start >= until) continue
-      slots.push({
-        start,
-        end,
-        gtiWm2: irradiance,
-        solarKwh: hourKwh * SLOT_HOURS, // quarter of the hourly energy
-      })
+  for (const day of forecast.days ?? []) {
+    for (const row of day.hourly_kwh_system ?? []) {
+      const [, hourKwh, utc] = row
+      if (typeof hourKwh !== 'number' || !utc) continue
+      const hourStart = new Date(utc.endsWith('Z') ? utc : `${utc}Z`)
+      const energy = Math.max(0, hourKwh)
+
+      for (let q = 0; q < 4; q++) {
+        const start = new Date(hourStart.getTime() + q * 15 * 60 * 1000)
+        const end = new Date(start.getTime() + 15 * 60 * 1000)
+        if (end <= from || start >= until) continue
+        slots.push({
+          start,
+          end,
+          gtiWm2: 0,
+          solarKwh: energy * (SLOT_HOURS / HOUR_HOURS),
+        })
+      }
     }
   }
 
   return slots.sort((a, b) => a.start.getTime() - b.start.getTime())
+}
+
+function parseForecast(payload: McpCallResult): JeroenForecast {
+  const structured = payload.result?.structuredContent
+  if (structured?.days) return structured
+
+  const text = payload.result?.content?.find((c) => c.type === 'text')?.text
+  if (text) {
+    try {
+      return JSON.parse(text) as JeroenForecast
+    } catch {
+      /* fall through */
+    }
+  }
+  return {}
 }
 
 export function solarKwhAt(slots: SolarForecastSlot[], start: Date): number {

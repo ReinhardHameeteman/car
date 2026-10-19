@@ -27,13 +27,18 @@ defineProps<{
 
 const { settings } = useSettings()
 
+const defaults = defaultFinishParts()
 const form = reactive({
   mode: 'km' as PlanMode,
   desiredKm: 150,
   targetSocPercent: 80,
-  finishBy: defaultFinishBy(),
+  /** Split date/time — `datetime-local` is broken in many Android WebViews. */
+  finishDate: defaults.date,
+  finishTime: defaults.time,
   useSolar: false,
 })
+
+const finishBy = computed(() => `${form.finishDate}T${form.finishTime}`)
 
 const solarReady = computed(() => isSolarConfigured(settings))
 const peblarReady = computed(() => isPeblarConfigured(settings))
@@ -41,12 +46,15 @@ const applyLabel = computed(() =>
   settings.schedulerTarget === 'peblar' ? 'Apply to Peblar' : 'Apply to car',
 )
 
-function defaultFinishBy() {
+function defaultFinishParts() {
   const d = new Date()
   d.setDate(d.getDate() + 1)
   d.setHours(7, 0, 0, 0)
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+  }
 }
 
 function onPlan() {
@@ -54,7 +62,7 @@ function onPlan() {
     mode: form.mode,
     desiredKm: form.mode === 'km' ? Number(form.desiredKm) : undefined,
     targetSocPercent: form.mode === 'soc' ? Number(form.targetSocPercent) : undefined,
-    finishBy: form.finishBy,
+    finishBy: finishBy.value,
     useSolar: form.useSolar && solarReady.value,
   })
 }
@@ -89,25 +97,30 @@ function onPlan() {
       </div>
     </div>
 
-    <div class="grid-2">
-      <div v-if="form.mode === 'km'" class="field">
-        <label for="km">Desired km</label>
-        <input id="km" v-model.number="form.desiredKm" type="number" min="1" max="800" step="1" />
-      </div>
-      <div v-else class="field">
-        <label for="soc">Target SOC (%)</label>
-        <input
-          id="soc"
-          v-model.number="form.targetSocPercent"
-          type="number"
-          min="50"
-          max="100"
-          step="10"
-        />
+    <div v-if="form.mode === 'km'" class="field">
+      <label for="km">Desired km</label>
+      <input id="km" v-model.number="form.desiredKm" type="number" min="1" max="800" step="1" />
+    </div>
+    <div v-else class="field">
+      <label for="soc">Target SOC (%)</label>
+      <input
+        id="soc"
+        v-model.number="form.targetSocPercent"
+        type="number"
+        min="20"
+        max="100"
+        step="10"
+      />
+    </div>
+
+    <div class="grid-2" style="margin-top: 0.85rem">
+      <div class="field">
+        <label for="finish-date">Finished by (date)</label>
+        <input id="finish-date" v-model="form.finishDate" type="date" />
       </div>
       <div class="field">
-        <label for="finish">Finished by</label>
-        <input id="finish" v-model="form.finishBy" type="datetime-local" />
+        <label for="finish-time">Finished by (time)</label>
+        <input id="finish-time" v-model="form.finishTime" type="time" step="60" />
       </div>
     </div>
 

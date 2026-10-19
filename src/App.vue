@@ -13,6 +13,7 @@ import {
   applyPeblarSchedule,
   isPeblarConfigured,
   preparePeblarForProfileCharging,
+  restorePeblarNow,
   runDuePeblarRestore,
   schedulePeblarRestoreCheck,
 } from './services/peblarApi'
@@ -129,8 +130,23 @@ async function onStart() {
   actionBusy.value = true
   error.value = null
   try {
+    let peblarNote = ''
+    if (isPeblarConfigured(settings)) {
+      try {
+        // Safety restore if Stop is never pressed (e.g. charge finishes overnight).
+        const restoreAt = new Date(Date.now() + 12 * 60 * 60 * 1000)
+        const peblar = await preparePeblarForProfileCharging({ ...settings }, restoreAt)
+        peblarNote =
+          peblar.previousMode === 'default'
+            ? ' · Peblar already in default mode'
+            : ` · Peblar ${peblar.previousMode} → default`
+      } catch (e) {
+        peblarNote = ` · Peblar: ${formatErr(e)}`
+      }
+    }
+
     await startCharging(settings.apiKey, settings.vin)
-    notice.value = 'Start charging requested.'
+    notice.value = `Start charging requested${peblarNote}.`
     await refresh()
   } catch (e) {
     if (isRateLimitError(e)) skodaRateLimited.value = true
@@ -145,7 +161,20 @@ async function onStop() {
   error.value = null
   try {
     await stopCharging(settings.apiKey, settings.vin)
-    notice.value = 'Stop charging requested.'
+
+    let peblarNote = ''
+    if (isPeblarConfigured(settings)) {
+      try {
+        const restored = await restorePeblarNow()
+        if (restored.restored && restored.previousMode && restored.previousMode !== 'default') {
+          peblarNote = ` · Peblar restored to ${restored.previousMode}`
+        }
+      } catch (e) {
+        peblarNote = ` · Peblar restore: ${formatErr(e)}`
+      }
+    }
+
+    notice.value = `Stop charging requested${peblarNote}.`
     await refresh()
   } catch (e) {
     if (isRateLimitError(e)) skodaRateLimited.value = true
@@ -182,10 +211,10 @@ async function onPlan(payload: {
       }
     } else if (
       payload.targetSocPercent == null ||
-      payload.targetSocPercent < 50 ||
+      payload.targetSocPercent < 20 ||
       payload.targetSocPercent > 100
     ) {
-      throw new Error('Target SOC must be between 50% and 100%.')
+      throw new Error('Target SOC must be between 20% and 100%.')
     }
 
     const useSolar = payload.useSolar && isSolarConfigured(settings)
