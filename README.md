@@ -70,7 +70,7 @@ Expose with HTTPS (Cloudflare Tunnel, etc.), open in Chrome, then **Install app*
 |---|---|
 | `/api/skoda/*` | `https://public.api.connect.skoda-auto.cz/*` |
 | `/api/energy/*` | `https://epexprijzen.nl/*` |
-| `/api/meteo/*` | `https://api.open-meteo.com/*` |
+| `/api/jeroen/*` | `https://jeroen.nl/*` (MCP solar forecast) |
 | `/api/peblar/*` | Peblar on your LAN |
 
 ## How the plan works

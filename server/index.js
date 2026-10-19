@@ -60,11 +60,11 @@ app.use(
 )
 
 app.use(
-  '/api/meteo',
+  '/api/jeroen',
   createProxyMiddleware({
-    target: 'https://api.open-meteo.com',
+    target: 'https://jeroen.nl',
     changeOrigin: true,
-    pathRewrite: { '^/api/meteo': '' },
+    pathRewrite: { '^/api/jeroen': '' },
   }),
 )
 
@@ -219,12 +219,36 @@ app.post('/api/peblar/prepare', async (req, res) => {
       await setSmartChargingMode(host, password, 'default')
     }
 
+    // Keep an earlier non-default previousMode if we are already in default
+    // (e.g. force-charge after a plan that already prepared Peblar).
+    const keepPrevious =
+      previousMode === 'default' &&
+      pendingRestore?.previousMode &&
+      pendingRestore.previousMode !== 'default'
+        ? pendingRestore.previousMode
+        : previousMode
+    const keepSchedule =
+      keepPrevious === pendingRestore?.previousMode
+        ? (pendingRestore.previousSchedule ?? null)
+        : null
+    const laterRestoreAt =
+      pendingRestore?.restoreAt &&
+      new Date(pendingRestore.restoreAt).getTime() > new Date(restoreAt).getTime()
+        ? pendingRestore.restoreAt
+        : restoreAt
+
     if (pendingRestore?.timer) clearTimeout(pendingRestore.timer)
-    pendingRestore = { host, password, previousMode, restoreAt }
+    pendingRestore = {
+      host,
+      password,
+      previousMode: keepPrevious,
+      previousSchedule: keepSchedule,
+      restoreAt: laterRestoreAt,
+    }
     persistPending()
     schedulePendingRestore()
 
-    res.json({ previousMode, activeMode: 'default', restoreAt })
+    res.json({ previousMode: keepPrevious, activeMode: 'default', restoreAt: laterRestoreAt })
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) })
   }
@@ -294,8 +318,9 @@ app.post('/api/peblar/restore-now', async (_req, res) => {
       res.json({ restored: false, reason: 'No pending restore.' })
       return
     }
+    const previousMode = pendingRestore.previousMode
     await runRestore()
-    res.json({ restored: !pendingRestore })
+    res.json({ restored: !pendingRestore, previousMode })
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) })
   }

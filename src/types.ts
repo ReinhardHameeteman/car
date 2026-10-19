@@ -21,7 +21,7 @@ export interface AppSettings {
   profileId: number | null
   /** Which device owns the cheap-slot schedule when applying a plan. */
   schedulerTarget: SchedulerTarget
-  /** Solar array location and orientation (Open-Meteo: azimuth 0° = South). */
+  /** Solar array location and orientation (jeroen.nl: azimuth 0° = South). */
   solarLatitude: number | null
   solarLongitude: number | null
   solarAzimuth: number | null
@@ -54,9 +54,9 @@ export interface EnergyPrice {
 export interface SolarForecastSlot {
   start: Date
   end: Date
-  /** Global tilted irradiance W/m² */
+  /** Legacy irradiance field; unused when yield comes from jeroen.nl. */
   gtiWm2: number
-  /** Estimated AC energy from the array in this slot (kWh) */
+  /** Forecast AC energy from the array in this slot (kWh) */
   solarKwh: number
 }
 

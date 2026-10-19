@@ -6,7 +6,10 @@ defineEmits<{ start: []; stop: [] }>()
 <template>
   <section class="panel">
     <h2>Force charge</h2>
-    <p class="muted">Starts or stops charging immediately (manual override).</p>
+    <p class="muted">
+      Starts or stops charging immediately. If Peblar is configured, Start switches it to default
+      mode; Stop restores the previous mode.
+    </p>
     <div class="actions">
       <button
         class="btn btn-primary"

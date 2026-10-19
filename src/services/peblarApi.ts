@@ -345,7 +345,11 @@ function clearPendingRestore() {
   localStorage.removeItem(RESTORE_KEY)
 }
 
-/** Switch Peblar to default mode (Skoda-owned schedule) and restore later. */
+/**
+ * Switch Peblar to default mode so the car can charge, and schedule restore.
+ * If already in default with a pending restore, keeps the earlier previousMode
+ * (avoids clobbering a planned restore with "default").
+ */
 export async function preparePeblarForProfileCharging(
   settings: AppSettings,
   restoreAt: Date,
@@ -354,14 +358,27 @@ export async function preparePeblarForProfileCharging(
     const host = settings.peblarHost.trim()
     const password = settings.peblarPassword.trim()
     const previousMode = await prepareDefaultModeNative(host, password)
+    const existing = loadPendingRestore()
+    const keepPrevious =
+      previousMode === 'default' && existing?.previousMode && existing.previousMode !== 'default'
+        ? existing.previousMode
+        : previousMode
+    const keepSchedule =
+      keepPrevious === existing?.previousMode ? (existing?.previousSchedule ?? null) : null
+    const iso = restoreAt.toISOString()
+    const laterRestoreAt =
+      existing?.restoreAt && new Date(existing.restoreAt).getTime() > restoreAt.getTime()
+        ? existing.restoreAt
+        : iso
     savePendingRestore({
       host,
       password,
-      previousMode,
-      restoreAt: restoreAt.toISOString(),
+      previousMode: keepPrevious,
+      previousSchedule: keepSchedule,
+      restoreAt: laterRestoreAt,
     })
     schedulePeblarRestoreCheck()
-    return { previousMode, restoreAt: restoreAt.toISOString() }
+    return { previousMode: keepPrevious, restoreAt: laterRestoreAt }
   }
 
   const response = await fetch('/api/peblar/prepare', {
@@ -378,6 +395,35 @@ export async function preparePeblarForProfileCharging(
     throw new Error(await readError(response))
   }
   return response.json()
+}
+
+/** Immediately restore Peblar to the mode saved before a prepare/apply. */
+export async function restorePeblarNow(): Promise<{
+  restored: boolean
+  previousMode?: PeblarSmartChargingMode
+}> {
+  if (isNativeApp()) {
+    const job = loadPendingRestore()
+    if (!job) return { restored: false }
+    await restoreNative(job)
+    clearPendingRestore()
+    if (restoreTimer) {
+      clearTimeout(restoreTimer)
+      restoreTimer = null
+    }
+    return { restored: true, previousMode: job.previousMode }
+  }
+
+  const response = await fetch('/api/peblar/restore-now', { method: 'POST' })
+  if (!response.ok) {
+    throw new Error(await readError(response))
+  }
+  const body = (await response.json()) as {
+    restored?: boolean
+    previousMode?: PeblarSmartChargingMode
+    reason?: string
+  }
+  return { restored: Boolean(body.restored), previousMode: body.previousMode }
 }
 
 /** Write optimized windows to Peblar schedule, enable scheduled mode, restore later. */
